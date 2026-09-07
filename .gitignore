@@ -1,18 +1,25 @@
-# Build and Release Folders
+# Dependencies
+node_modules/
+
+# Local Vercel project link
+.vercel/
+
+# Generated packages and scratch uploads
+*.zip
+upload/
+
+# Build and release folders
 bin-debug/
 bin-release/
 [Oo]bj/
 [Bb]in/
 
-# Other files and folders
+# Other generated files and folders
 .settings/
+appengine-generated/
 
 # Executables
 *.swf
 *.air
 *.ipa
 *.apk
-
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
