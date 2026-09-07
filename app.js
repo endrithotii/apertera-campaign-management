@@ -1864,7 +1864,18 @@ function renderMain(){
 }
 
 // ---------- Amplify Challenge (independent from paid-ad spreadsheet data) ----------
-let AMPLIFY_DATA = { leaderboard:[], posts:[], config:null, runs:[], loaded:false, error:'' };
+const AMPLIFY_DEPARTMENTS = [
+  { name:'Marketing', total:8, color:'#ef3f36' },
+  { name:'HR', total:4, color:'#fbbc04' },
+  { name:'Management', total:8, color:'#34a853' },
+  { name:'Go-to-Market / BD', total:7, color:'#ff6d01' },
+  { name:'Finance', total:6, color:'#4dbcc3' },
+  { name:'Client Success', total:9, color:'#79a7ee' },
+  { name:'Linguistic Operations', total:68, color:'#ee756f' },
+  { name:'Tech', total:39, color:'#6d7a90' },
+  { name:'Product', total:7, color:'#a57bd9' }
+];
+let AMPLIFY_DATA = { leaderboard:[], posts:[], participants:[], config:null, runs:[], loaded:false, error:'' };
 function amplifyHeaders(extra={}){
   const session = getStoredSession();
   return { apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${session?.access_token || ''}`, ...extra };
@@ -1877,18 +1888,78 @@ async function amplifyGet(path){
 async function loadAmplifyData(force=false){
   if(AMPLIFY_DATA.loaded && !force) return;
   try{
-    const [leaderboard,posts,config,runs] = await Promise.all([
+    const [leaderboard,posts,participants,config,runs] = await Promise.all([
       amplifyGet('amplify_leaderboard?select=*&order=total_points.desc,full_name.asc'),
       amplifyGet('amplify_posts?select=post_url,full_name,content,score,is_repost,posted_at,post_date_label&score=gt.0&order=posted_at.desc.nullslast&limit=8'),
+      amplifyGet('amplify_participants?select=profile_key,profile_url,full_name,department,active&order=full_name.asc'),
       amplifyGet('amplify_config?select=*&id=eq.true'),
       amplifyGet('amplify_sync_runs?select=*&order=started_at.desc&limit=5')
     ]);
-    AMPLIFY_DATA = {leaderboard,posts,config:config[0]||null,runs,loaded:true,error:''};
+    AMPLIFY_DATA = {leaderboard,posts,participants,config:config[0]||null,runs,loaded:true,error:''};
   }catch(error){ AMPLIFY_DATA = {...AMPLIFY_DATA,loaded:true,error:error.message}; }
 }
 function amplifyDate(value){
   if(!value) return '';
   const date = new Date(value); return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+function normalizeAmplifyDepartment(value=''){
+  const raw = String(value || '').trim();
+  const compact = raw.toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,' ');
+  if(!compact) return '';
+  if(compact.includes('marketing')) return 'Marketing';
+  if(compact === 'hr' || compact.includes('human resources')) return 'HR';
+  if(compact.includes('management')) return 'Management';
+  if(compact.includes('go to market') || compact.includes('business development') || compact.includes('bd')) return 'Go-to-Market / BD';
+  if(compact.includes('finance')) return 'Finance';
+  if(compact.includes('client success')) return 'Client Success';
+  if(compact.includes('linguistic')) return 'Linguistic Operations';
+  if(compact.includes('tech') || compact.includes('engineering')) return 'Tech';
+  if(compact.includes('product')) return 'Product';
+  return raw;
+}
+function amplifyDepartmentStats(participants=[]){
+  const counts = new Map(AMPLIFY_DEPARTMENTS.map(dept=>[dept.name,0]));
+  const unassigned = [];
+  participants.filter(row=>row.active !== false).forEach(row=>{
+    const dept = normalizeAmplifyDepartment(row.department);
+    if(counts.has(dept)) counts.set(dept, counts.get(dept) + 1);
+    else unassigned.push(row);
+  });
+  const rows = AMPLIFY_DEPARTMENTS.map(dept=>{
+    const registered = counts.get(dept.name) || 0;
+    const participation = dept.total ? Math.round(registered / dept.total * 100) : 0;
+    return {...dept, registered, participation};
+  });
+  const totalRegistered = rows.reduce((sum,row)=>sum + row.registered, 0);
+  const totalEmployees = rows.reduce((sum,row)=>sum + row.total, 0);
+  return { rows, unassigned, totalRegistered, totalEmployees, participation: totalEmployees ? Math.round(totalRegistered / totalEmployees * 100) : 0 };
+}
+function departmentPieGradient(rows){
+  let cursor = 0;
+  const total = rows.reduce((sum,row)=>sum + row.total, 0) || 1;
+  return rows.map(row=>{
+    const start = cursor;
+    cursor += row.total / total * 100;
+    return `${row.color} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  }).join(',');
+}
+function renderAmplifyDepartmentView(participants){
+  const stats = amplifyDepartmentStats(participants);
+  return `<section class="amplify-dept-grid">
+    <div class="amplify-panel amplify-dept-panel">
+      <div class="amplify-panel-head"><h3>Department participation</h3><span>${fmtInt(stats.totalRegistered)} of ${fmtInt(stats.totalEmployees)} registered</span></div>
+      <div class="amplify-table-wrap"><table class="amplify-table amplify-dept-table"><thead><tr><th>Dept</th><th>Registered</th><th>Total employees</th><th>Participation</th></tr></thead><tbody>
+        ${stats.rows.map(row=>`<tr><td><span class="amplify-dept-dot" style="background:${row.color}"></span>${escapeHTML(row.name)}</td><td>${fmtInt(row.registered)}</td><td>${fmtInt(row.total)}</td><td><div class="amplify-participation"><span>${fmtInt(row.participation)}%</span><div><i style="width:${Math.min(100,row.participation)}%"></i></div></div></td></tr>`).join('')}
+        <tr class="amplify-dept-total"><td>Total</td><td>${fmtInt(stats.totalRegistered)}</td><td>${fmtInt(stats.totalEmployees)}</td><td>${fmtInt(stats.participation)}%</td></tr>
+      </tbody></table></div>
+      ${stats.unassigned.length ? `<div class="amplify-dept-note"><strong>Needs department:</strong> ${stats.unassigned.map(row=>escapeHTML(row.full_name)).join(', ')}</div>` : ''}
+    </div>
+    <div class="amplify-panel amplify-chart-panel">
+      <div class="amplify-panel-head"><h3>Headcount by department</h3><span>Based on total employees</span></div>
+      <div class="amplify-chart-body"><div class="amplify-pie" style="background:conic-gradient(${departmentPieGradient(stats.rows)})"></div>
+        <div class="amplify-legend">${stats.rows.map(row=>`<div><span style="background:${row.color}"></span><b>${escapeHTML(row.name)}</b><em>${fmtInt(row.total)}</em></div>`).join('')}</div></div>
+    </div>
+  </section>`;
 }
 function isAmplifyAdmin(){return String(getCurrentUserEmail()||'').toLowerCase()==='growth@apertera.com';}
 const AMPLIFY_UPDATE_TYPES = {
@@ -2014,8 +2085,8 @@ async function renderAmplifyView(){
     await loadAmplifyData();
     if(currentView !== 'amplify') return;
   }
-  const {leaderboard,posts,config,runs,error}=AMPLIFY_DATA;
-  document.getElementById('amplify-nav-count').textContent = leaderboard.length || '0';
+  const {leaderboard,posts,participants,config,runs,error}=AMPLIFY_DATA;
+  document.getElementById('amplify-nav-count').textContent = participants.length || leaderboard.length || '0';
   if(error){ content.innerHTML=`<div class="amplify-empty">Could not load Amplify Challenge: ${escapeHTML(error)}</div>`; return; }
   const active = leaderboard.filter(row=>Number(row.total_points)>0);
   const totalPoints = active.reduce((sum,row)=>sum+Number(row.total_points||0),0);
@@ -2029,7 +2100,8 @@ async function renderAmplifyView(){
       <div class="amplify-update-group"><div class="amplify-update-head"><div><h3>Manual import</h3><p>Upload one export at a time, or use the combined tracker workbook.</p></div><span class="amplify-credit-pill free">No API credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-import="activity"><strong>Employee activity</strong><span>Activity Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="likes"><strong>Likes</strong><span>Likes Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="comments"><strong>Comments</strong><span>Comments Excel / JSON</span></button><button class="amplify-choice all" data-amplify-import="all"><strong>All-in-one</strong><span>Workbook / combined JSON</span></button></div><input id="amplifyFile" type="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden></div>
     </section>
     <div class="amplify-status" id="amplifyStatus">${lastRun ? `Last sync ${amplifyDate(lastRun.finished_at||lastRun.started_at)} · ${escapeHTML(lastRun.message||lastRun.status)}` : 'Historical workbook imported · API sync is ready to configure'}</div>
-    <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(leaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
+    <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(participants.length || leaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
+    ${renderAmplifyDepartmentView(participants)}
     <div class="amplify-grid"><section class="amplify-panel"><div class="amplify-panel-head"><h3>Leaderboard</h3><span>${active.length} scoring participants</span></div><div class="amplify-table-wrap"><table class="amplify-table"><thead><tr><th>#</th><th>Participant</th><th>Posts</th><th>Interactions</th><th>Recovered</th><th>Marketing's Pick</th><th>Total</th><th>Entries</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>${leaderboard.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${fmtInt(row.post_points)}</td><td>${fmtInt(row.interaction_points)}</td><td>${fmtInt(row.recovered_points)}</td><td>${fmtInt(row.marketing_pick_points)}</td><td class="amplify-total">${fmtInt(row.total_points)}</td><td><span class="amplify-entry">${fmtInt(row.entries)}</span></td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-adjust="${index}">+ Assign</button></td>`:''}</tr>`).join('')}</tbody></table></div></section>
       <div><section class="amplify-panel"><div class="amplify-panel-head"><h3>Scoring rules</h3><span>Current</span></div><div class="amplify-rule-list"><div class="amplify-rule">Original Apertera post <b>+${config?.post_points||15}</b></div><div class="amplify-rule">Repost / share <b>+${config?.repost_points||5}</b></div><div class="amplify-rule">Like company post <b>+${config?.like_points||3}</b></div><div class="amplify-rule">Comment on company post <b>+${config?.comment_points||5}</b></div><div class="amplify-rule">Marketing's Pick <b>+${config?.marketing_pick_points||20}</b></div></div></section>
       <section class="amplify-panel" style="margin-top:18px"><div class="amplify-panel-head"><h3>Recent scoring posts</h3><span>${posts.length} shown</span></div><div class="amplify-feed">${posts.length?posts.map(post=>`<div class="amplify-post"><div class="amplify-post-top"><strong>${escapeHTML(post.full_name)}</strong><span>${post.is_repost?'Repost':'Post'} · ${amplifyDate(post.posted_at)||escapeHTML(post.post_date_label)}</span><a class="amplify-post-score" href="${escapeHTML(post.post_url)}" target="_blank" rel="noopener noreferrer">+${post.score}</a></div><div class="amplify-post-copy">${escapeHTML(post.content)}</div></div>`).join(''):'<div class="amplify-empty">No scoring posts yet.</div>'}</div></section></div>
@@ -2049,20 +2121,42 @@ async function renderAmplifyView(){
     try{
       if(file.size>3*1024*1024)throw new Error('Please upload a file smaller than 3 MB.');
       if(file.name.toLowerCase().endsWith('.json')){
-        const data=JSON.parse(await file.text()); await runAmplifySync({mode:'import',importType:amplifyImportType,posts:data,fileName:file.name});
+        const data=JSON.parse(await file.text()); await runAmplifySync({mode:'import',importType:amplifyImportType,items:data,fileName:file.name});
       }else if(file.name.toLowerCase().endsWith('.xlsx')){
         const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
-        await runAmplifySync({mode:'workbook',importType:amplifyImportType,fileName:file.name,fileBase64:btoa(binary)});
+        await runAmplifySync({mode:amplifyImportType==='all'?'workbook':'import-source-workbook',importType:amplifyImportType,fileName:file.name,fileBase64:btoa(binary)});
       }else throw new Error('Use the Amplify tracker .xlsx workbook or an Apify .json export.');
     }catch(e){document.getElementById('amplifyStatus').textContent=`Import failed: ${e.message}`;} finally{event.target.value='';}
   };
+}
+function amplifySourcePayloads(payload){
+  if(payload.mode === 'configured'){
+    const sources = payload.syncType === 'all' ? ['posts','reposts','likes','comments'] : payload.syncType === 'activity' ? ['posts','reposts'] : [payload.syncType];
+    return sources.map(source=>({mode:'sync-source',source}));
+  }
+  if(payload.mode === 'import'){
+    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : 'posts';
+    return [{mode:'import-source',source,items:payload.items,fileName:payload.fileName}];
+  }
+  if(payload.mode === 'import-source-workbook'){
+    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : 'posts';
+    return [{mode:'import-source-workbook',source,fileBase64:payload.fileBase64,fileName:payload.fileName}];
+  }
+  return [payload];
 }
 async function runAmplifySync(payload,triggerButton=null){
   const buttons=[...document.querySelectorAll('[data-amplify-sync],[data-amplify-import]')]; const status=document.getElementById('amplifyStatus');
   buttons.forEach(button=>button.disabled=true); if(status)status.textContent=payload.mode==='import'||payload.mode==='workbook'?`Importing ${AMPLIFY_UPDATE_TYPES[payload.importType||'all'].label.toLowerCase()}…`:AMPLIFY_UPDATE_TYPES[payload.syncType||'all'].working;
   try{
-    const session=getStoredSession(); const res=await fetch('/api/amplify-sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token||''}`},body:JSON.stringify(payload)}); const result=await res.json();
-    if(!res.ok)throw new Error(result.error||'Sync failed.'); AMPLIFY_DATA.loaded=false; await renderAmplifyView(); const next=document.getElementById('amplifyStatus'); if(next)next.textContent=result.message;
+    const session=getStoredSession();
+    const results=[];
+    for(const step of amplifySourcePayloads(payload)){
+      const res=await fetch('/api/amplify-sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token||''}`},body:JSON.stringify(step)});
+      const result=await res.json();
+      if(!res.ok)throw new Error(result.error||'Sync failed.');
+      results.push(result);
+    }
+    AMPLIFY_DATA.loaded=false; await renderAmplifyView(); const next=document.getElementById('amplifyStatus'); if(next)next.textContent=results.map(result=>result.message).join(' ');
   }catch(error){if(status)status.textContent=`Update failed: ${error.message}`;buttons.forEach(button=>button.disabled=false);}
 }
 
