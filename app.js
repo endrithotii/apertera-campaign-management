@@ -279,6 +279,11 @@ function shortUrl(url){
     return url.length > 60 ? url.slice(0,60) + '…' : url;
   }
 }
+function adLinkedInPreviewLinkHTML(ad, compact=false){
+  if(!ad || !ad.previewUrl) return `<div class="ad-link-row missing">No LinkedIn preview URL saved</div>`;
+  const label = compact ? 'LinkedIn preview' : shortUrl(ad.previewUrl);
+  return `<div class="ad-link-row"><span>LinkedIn:</span><a href="${escapeHTML(ad.previewUrl)}" target="_blank" rel="noopener" title="${escapeHTML(ad.previewUrl)}">${escapeHTML(label)} ↗</a></div>`;
+}
 function isLikelyExpiringAssetUrl(url){
   const value = String(url || '');
   if(!value) return false;
@@ -2653,6 +2658,7 @@ function galleryAdDetailHTML(ad){
           <div class="gallery-detail-eyebrow">Selected ad</div>
           <div class="gallery-detail-title">${adLabel(ad)}</div>
           <div class="gallery-detail-meta">${ad.campaignShort}<br>${adsetName}</div>
+          ${adLinkedInPreviewLinkHTML(ad)}
         </div>
         <button type="button" class="gallery-detail-close" id="closeGalleryDetail" aria-label="Close selected ad">&times;</button>
       </div>
@@ -2729,6 +2735,7 @@ function renderAdsGalleryView(){
               <div class="ad-gallery-headline">${ad.headline || 'No headline recorded'}</div>
             </div>
             <div class="ad-gallery-meta">${ad.campaignShort}<br>${ADSET_DISPLAY_NAMES[adsetKey(ad.campaign, ad.adset)] || ad.adset}</div>
+            ${adLinkedInPreviewLinkHTML(ad, true)}
             <div class="ad-gallery-stats">
               <div><div class="s-label">Spend</div><div class="s-value">${fmtMoney(ad.spend,0)}</div></div>
               <div><div class="s-label">Impr.</div><div class="s-value">${fmtInt(ad.impressions)}</div></div>
@@ -2758,7 +2765,7 @@ function renderAdsGalleryView(){
   });
   document.querySelectorAll('[data-open-gallery-ad]').forEach(el => {
     const openAdDetail = (event) => {
-      if(event.target.closest('[data-ad-actions], [data-compare-ad-toggle]')) return;
+      if(event.target.closest('[data-ad-actions], [data-compare-ad-toggle], .ad-link-row a')) return;
       const ad = AD_INDEX[el.getAttribute('data-open-gallery-ad')];
       if(!ad) return;
       gallerySelectedAdName = ad.name;
