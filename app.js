@@ -296,6 +296,7 @@ function supabaseHeaders(extra = {}){
 
 let OVERRIDES_CACHE = {};
 let OVERRIDES_BY_EXTERNAL_ID = {};
+let OVERRIDES_BY_LOOKUP_KEY = {};
 const CREATIVE_BUCKET = 'campaign-creatives';
 
 // LinkedIn CDN image links are temporary and can expire. Keep repaired creatives
@@ -311,13 +312,18 @@ async function fetchOverrides(){
     const rows = await res.json();
     const map = {};
     const byExternalId = {};
+    const byLookupKey = {};
     rows.forEach(r => {
-      const value = { imageUrl: r.image_url || '', imageStoragePath: r.image_storage_path || '', previewUrl: r.preview_url || '', ctaLabel: r.cta_label || '', ctaUrl: r.cta_url || '', feedbackNote: r.feedback_note || '', feedbackApplied: !!r.feedback_applied, displayName: r.display_name || '', externalId: r.ad_external_id || '' };
+      const externalId = r.ad_external_id || extractAdExternalIdFromText([r.preview_url, r.cta_url].join(' '));
+      const value = { imageUrl: r.image_url || '', imageStoragePath: r.image_storage_path || '', previewUrl: r.preview_url || '', ctaLabel: r.cta_label || '', ctaUrl: r.cta_url || '', feedbackNote: r.feedback_note || '', feedbackApplied: !!r.feedback_applied, displayName: r.display_name || '', externalId };
       map[r.ad_name] = value;
-      if(r.ad_external_id) byExternalId[r.ad_external_id] = mergeOverrideValues(byExternalId[r.ad_external_id], value);
+      if(externalId) byExternalId[externalId] = mergeOverrideValues(byExternalId[externalId], value);
+      adOverrideLookupKeys({ name: r.ad_name, displayName: r.display_name, previewUrl: r.preview_url, ctaUrl: r.cta_url })
+        .forEach(key => { byLookupKey[key] = mergeOverrideValues(byLookupKey[key], value); });
     });
     OVERRIDES_CACHE = map;
     OVERRIDES_BY_EXTERNAL_ID = byExternalId;
+    OVERRIDES_BY_LOOKUP_KEY = byLookupKey;
   } catch(e){
     console.error('Could not load shared ad previews:', e);
   }
@@ -353,7 +359,11 @@ function overrideForAd(adOrName){
   const ad = typeof adOrName === 'string' ? AD_INDEX[adOrName] : adOrName;
   const adName = typeof adOrName === 'string' ? adOrName : ad?.name;
   if(ad?.externalId && OVERRIDES_BY_EXTERNAL_ID[ad.externalId]) return OVERRIDES_BY_EXTERNAL_ID[ad.externalId];
-  return (adName && OVERRIDES_CACHE[adName]) || {};
+  if(adName && OVERRIDES_CACHE[adName]) return OVERRIDES_CACHE[adName];
+  for(const key of adOverrideLookupKeys(ad || { name: adName })){
+    if(OVERRIDES_BY_LOOKUP_KEY[key]) return OVERRIDES_BY_LOOKUP_KEY[key];
+  }
+  return {};
 }
 
 async function saveOverride(adName, imageUrl, previewUrl, ctaLabel, ctaUrl, imageStoragePath=''){
@@ -507,10 +517,12 @@ function getCurrentUserEmail(){
 
 function applyOverride(ad){
   if(!ad || !ad.name) return ad;
-  const o = overrideForAd(ad);
+  const externalId = ad.externalId || extractAdExternalIdFromText([ad.previewUrl, ad.ctaUrl, ad.url].join(' '));
+  const o = overrideForAd({ ...ad, externalId });
   const durableSavedImage = o.imageStoragePath ? o.imageUrl : '';
   return {
     ...ad,
+    externalId,
     // Durable uploads win first. A recovered local asset must not be hidden by
     // an older expired LinkedIn override; temporary URLs remain the fallback.
     imageUrl: durableSavedImage || DURABLE_IMAGE_OVERRIDES[ad.name] || o.imageUrl || ad.imageUrl || '',
@@ -763,6 +775,38 @@ function firstRecordValue(record, keys){
   return '';
 }
 
+function extractAdExternalIdFromText(value){
+  const text = String(value || '');
+  const hsaMatch = text.match(/[?&]hsa_ad=([0-9]+)/i);
+  if(hsaMatch) return hsaMatch[1];
+  const creativeMatch = text.match(/sponsoredCreative:([0-9]+)/i);
+  if(creativeMatch) return creativeMatch[1];
+  return '';
+}
+
+function normalizedLookupKey(value){
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/(?:^|\s)(?:resized|version|v)\s*\d+\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function adOverrideLookupKeys(ad = {}){
+  const keys = new Set();
+  [ad.name, ad.displayName].forEach(value => {
+    const key = normalizedLookupKey(value);
+    if(key) keys.add(`name:${key}`);
+  });
+  [ad.previewUrl, ad.ctaUrl, ad.url].forEach(value => {
+    const externalId = extractAdExternalIdFromText(value);
+    if(externalId) keys.add(`id:${externalId}`);
+  });
+  return [...keys];
+}
+
 function recordCTA(record){
   return firstRecordValue(record, [
     'Call to Action',
@@ -775,12 +819,22 @@ function recordCTA(record){
   ]);
 }
 function recordAdExternalId(record){
-  return firstRecordValue(record, [
+  const explicit = firstRecordValue(record, [
     'Ad ID',
     'Creative ID',
     'Ad Creative ID',
-    'Sponsored Content ID'
+    'Sponsored Content ID',
+    'Campaign Manager Creative ID',
+    'Campaign Manager Ad ID'
   ]);
+  if(explicit) return explicit;
+  return extractAdExternalIdFromText([
+    record['Click URL'],
+    record['Destination URL'],
+    record['Landing Page URL'],
+    record['Ad Preview URL'],
+    record['Preview URL']
+  ].join(' '));
 }
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function parseUSDate(v){
@@ -1251,7 +1305,16 @@ document.getElementById('adPreviewSave').addEventListener('click', async () => {
     }
     await saveOverride(adName, imageUrl, previewUrl, ctaLabel, ctaUrl, imageStoragePath);
     statusEl.textContent = 'Saved — visible to everyone.'; statusEl.className = 'modal-status ok';
-    setTimeout(() => { closeAdPreviewEditor(); loadData().then(() => { openPanel(state.selectedId); }); }, 500);
+    setTimeout(async () => {
+      const returnView = currentView;
+      closeAdPreviewEditor();
+      await loadData();
+      if(returnView === 'adset-detail' && state.selectedId) openPanel(state.selectedId, adName, detailReturnView);
+      else {
+        currentView = returnView;
+        renderMain();
+      }
+    }, 500);
   } catch(e){
     statusEl.textContent = 'Could not save (' + e.message + ').'; statusEl.className = 'modal-status bad';
   }
@@ -1259,18 +1322,6 @@ document.getElementById('adPreviewSave').addEventListener('click', async () => {
 document.getElementById('adPreviewOverlay').addEventListener('click', (e) => {
   if(e.target.id === 'adPreviewOverlay') closeAdPreviewEditor();
 });
-// The creative lists are replaced with innerHTML whenever filters, sorting, or
-// the selected preview changes. Delegate this action once so Add/Edit image
-// keeps working across every render path.
-document.addEventListener('click', (e) => {
-  if(!(e.target instanceof Element)) return;
-  const trigger = e.target.closest('.edit-preview-link[data-ad]');
-  if(!trigger) return;
-  e.preventDefault();
-  e.stopPropagation();
-  openAdPreviewEditor(trigger.getAttribute('data-ad'));
-});
-
 // ---------- shared rename editor — original export names remain stable lookup keys ----------
 async function openRenameEditor(adName){
   if(!adName) return;
@@ -2781,12 +2832,7 @@ function renderCreativesView(){
 
   document.getElementById('content').innerHTML = html;
   wireBannerButtons();
-  document.querySelectorAll('[data-rename-ad]').forEach(el => {
-    el.addEventListener('click', () => openRenameEditor(el.getAttribute('data-rename-ad')));
-  });
-  document.querySelectorAll('.fb-link[data-fb-ad]').forEach(el => {
-    el.addEventListener('click', () => openAdFeedbackEditor(el.getAttribute('data-fb-ad')));
-  });
+  wireAdActionButtons(document.getElementById('content'));
 }
 
 // ---------- Landing Pages view ----------
@@ -3267,42 +3313,46 @@ function renderAdSetDetailView(){
   });
 }
 
-// The gallery is rebuilt with innerHTML. Bind each action directly whenever a
-// card appears so parent-card clicks, nested labels, and browser differences
-// cannot swallow Edit preview, Rename, Comment, or Ask AI.
+// The ad gallery/detail markup is rebuilt with innerHTML often. Handle all
+// card actions through one stable delegated listener so dynamic renders cannot
+// leave Edit preview, Rename, Comment, or Ask AI inert.
 function runAdAction(trigger){
+  if(!trigger) return false;
   if(trigger.hasAttribute('data-ai-ad')){
     const ad = AD_INDEX[trigger.getAttribute('data-ai-ad')];
     if(ad) runAIAnalysis(aiPayloadForAd(ad));
-  } else if(trigger.hasAttribute('data-ai-adset')){
+    return true;
+  }
+  if(trigger.hasAttribute('data-ai-adset')){
     const campaign = trigger.getAttribute('data-campaign');
     const adset = trigger.getAttribute('data-adset');
     const card = CARDS.find(item => item.campaign === campaign && item.name === adset);
     if(card) runAIAnalysis(aiPayloadForAdset(card));
-  } else if(trigger.hasAttribute('data-ad')){
-    openAdPreviewEditor(trigger.getAttribute('data-ad'));
-  } else if(trigger.hasAttribute('data-rename-ad')){
-    openRenameEditor(trigger.getAttribute('data-rename-ad'));
-  } else {
-    openAdFeedbackEditor(trigger.getAttribute('data-fb-ad'));
+    return true;
   }
+  if(trigger.hasAttribute('data-ad')){
+    openAdPreviewEditor(trigger.getAttribute('data-ad'));
+    return true;
+  }
+  if(trigger.hasAttribute('data-rename-ad')){
+    openRenameEditor(trigger.getAttribute('data-rename-ad'));
+    return true;
+  }
+  if(trigger.hasAttribute('data-fb-ad')){
+    openAdFeedbackEditor(trigger.getAttribute('data-fb-ad'));
+    return true;
+  }
+  return false;
 }
-function wireAdActionButtons(root=document){
-  const selector='[data-ai-ad], [data-ai-adset], [data-ad-actions] [data-ad], [data-ad-actions] [data-rename-ad], [data-ad-actions] [data-fb-ad]';
-  root.querySelectorAll(selector).forEach(trigger=>{
-    if(trigger.dataset.adActionBound==='true')return;
-    trigger.dataset.adActionBound='true';
-    trigger.addEventListener('click',event=>{
-      event.preventDefault();
-      event.stopPropagation();
-      runAdAction(trigger);
-    });
-  });
-}
-const contentActionsRoot=document.getElementById('content');
-const adActionObserver=new MutationObserver(()=>wireAdActionButtons(contentActionsRoot));
-adActionObserver.observe(contentActionsRoot,{childList:true,subtree:true});
-wireAdActionButtons(contentActionsRoot);
+function wireAdActionButtons(){ /* Actions are delegated from #content. */ }
+document.getElementById('content').addEventListener('click', event => {
+  if(!(event.target instanceof Element)) return;
+  const trigger = event.target.closest('[data-ai-ad], [data-ai-adset], [data-ad], [data-rename-ad], [data-fb-ad]');
+  if(!trigger) return;
+  event.preventDefault();
+  event.stopPropagation();
+  runAdAction(trigger);
+});
 document.getElementById('content').addEventListener('change', async (e) => {
   if(!(e.target instanceof HTMLInputElement) || !e.target.matches('[data-campaign-objectives] input[type="checkbox"]')) return;
   const picker = e.target.closest('[data-campaign-objectives]');
