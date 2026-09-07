@@ -1266,18 +1266,18 @@
 
 <div class="modal-overlay" id="adPreviewOverlay">
   <div class="modal">
-    <h2>Customize ad preview</h2>
-    <p>For <b id="adPreviewName">—</b>. Add or update the creative links and the call-to-action shown in this ad's preview.</p>
-    <label>Ad creative image</label>
+    <h2>Edit ad assets and links</h2>
+    <p>For <b id="adPreviewName">—</b>. Update the internal preview image, the real LinkedIn preview URL, and the destination link shown for this ad.</p>
+    <label>Ad image file</label>
     <input type="file" id="adImageFileInput" accept="image/png,image/jpeg,image/webp,image/gif">
     <p style="margin:6px 0 10px;font-size:12px;">Upload the image file once. It will be stored permanently and reused after every spreadsheet sync.</p>
-    <label>External image URL <span style="font-weight:400;">(optional)</span></label>
+    <label>External ad image URL <span style="font-weight:400;">(optional)</span></label>
     <input type="text" id="adImageUrlInput" placeholder="Use only for a permanent image URL">
-    <label style="margin-top:10px;">LinkedIn Preview URL</label>
-    <input type="text" id="adPreviewUrlInput" placeholder="https://www.linkedin.com/ads/preview/...">
+    <label style="margin-top:10px;">LinkedIn preview URL</label>
+    <input type="text" id="adPreviewUrlInput" placeholder="https://www.linkedin.com/feed/update/...">
     <label style="margin-top:10px;">CTA button label</label>
     <input type="text" id="adCtaLabelInput" maxlength="80" placeholder="e.g. Download, Learn more, Register">
-    <label style="margin-top:10px;">CTA destination URL</label>
+    <label style="margin-top:10px;">Destination / CTA URL</label>
     <input type="url" id="adCtaUrlInput" placeholder="https://apertera.com/...">
     <div class="modal-status" id="adAssetHealth" style="margin-top:12px;"></div>
     <div class="modal-status" id="adPreviewStatus"></div>

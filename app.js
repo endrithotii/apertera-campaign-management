@@ -280,9 +280,11 @@ function shortUrl(url){
   }
 }
 function adLinkedInPreviewLinkHTML(ad, compact=false){
-  if(!ad || !ad.previewUrl) return `<div class="ad-link-row missing">No LinkedIn preview URL saved</div>`;
-  const label = compact ? 'LinkedIn preview' : shortUrl(ad.previewUrl);
-  return `<div class="ad-link-row"><span>LinkedIn:</span><a href="${escapeHTML(ad.previewUrl)}" target="_blank" rel="noopener" title="${escapeHTML(ad.previewUrl)}">${escapeHTML(label)} ↗</a></div>`;
+  const saved = overrideForAd(ad);
+  const previewUrl = (ad && ad.previewUrl) || saved.previewUrl || '';
+  if(!previewUrl) return `<div class="ad-link-row missing">No LinkedIn preview URL saved yet</div>`;
+  const label = compact ? 'LinkedIn preview URL' : shortUrl(previewUrl);
+  return `<div class="ad-link-row"><span>LinkedIn preview URL:</span><a href="${escapeHTML(previewUrl)}" target="_blank" rel="noopener" title="${escapeHTML(previewUrl)}">${escapeHTML(label)} ↗</a></div>`;
 }
 function isLikelyExpiringAssetUrl(url){
   const value = String(url || '');
@@ -1268,8 +1270,8 @@ async function openAdPreviewEditor(adName){
   else if(effectiveImage && /(?:licdn\.com|linkedin\.com).*?(?:[?&](?:e|exp|expires)=|dms\/image)/i.test(effectiveImage)) health.push('Image: temporary LinkedIn link — upload the file to make it durable');
   else if(effectiveImage) health.push('Image: external URL');
   else health.push('Image: not added');
-  health.push(existing.previewUrl ? 'Preview link: saved in DB ✓' : 'Preview link: using spreadsheet fallback');
-  health.push(existing.ctaUrl ? 'CTA destination: saved in DB ✓' : 'CTA destination: using spreadsheet fallback');
+  health.push(existing.previewUrl ? 'LinkedIn preview URL: saved in DB ✓' : (ad.previewUrl ? 'LinkedIn preview URL: using spreadsheet fallback' : 'LinkedIn preview URL: not saved yet'));
+  health.push(existing.ctaUrl ? 'Destination/CTA URL: saved in DB ✓' : (ad.url ? 'Destination/CTA URL: using spreadsheet fallback' : 'Destination/CTA URL: not saved yet'));
   if(ad.externalId) health.push('Matched by creative ID ✓');
   document.getElementById('adAssetHealth').textContent = health.join(' · ');
   document.getElementById('adAssetHealth').className = 'modal-status ' + (existing.imageStoragePath ? 'ok' : '');
@@ -1703,7 +1705,7 @@ function renderLiPreview(ad, fallbackHeadline){
       </div>
       <div class="li-foot">
         <span class="li-cta-meta">${cta ? `CTA: ${escapeHTML(cta)}${ctaUrl ? ` → ${escapeHTML(shortUrl(ctaUrl))}` : ''}` : 'CTA not included in this data snapshot'}</span>
-        ${ad.previewUrl ? `<a class="learn" href="${escapeHTML(ad.previewUrl)}" target="_blank" rel="noopener">View on LinkedIn ↗</a>` : ''}
+        ${ad.previewUrl ? `<a class="learn" href="${escapeHTML(ad.previewUrl)}" target="_blank" rel="noopener">Open LinkedIn preview ↗</a>` : ''}
       </div>
       <div class="li-actions">
         <span>👍 Like</span><span>💬 Comment</span><span>↗ Share</span><span>✉ Send</span>
