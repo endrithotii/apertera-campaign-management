@@ -1,0 +1,12 @@
+{
+  "name": "apertera-linkedin-app",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "ai": "^6.0.0",
+    "exceljs": "^4.4.0"
+  }
+}

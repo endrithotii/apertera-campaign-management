@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/amplify-sync.js": {
+      "maxDuration": 300
+    }
+  }
+}
