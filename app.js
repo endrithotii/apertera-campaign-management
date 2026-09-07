@@ -2036,6 +2036,7 @@ function renderAmplifyDepartmentView(participants){
 function isAmplifyAdmin(){return String(getCurrentUserEmail()||'').toLowerCase()==='growth@apertera.com';}
 const AMPLIFY_UPDATE_TYPES = {
   activity:{label:'Employee activity',calls:2,working:'Syncing employee posts and reposts…'},
+  reposts:{label:'Reposts',calls:1,working:'Syncing employee reposts…'},
   likes:{label:'Likes',calls:1,working:'Syncing employee likes…'},
   comments:{label:'Comments',calls:1,working:'Syncing employee comments…'},
   all:{label:'All data',calls:4,working:'Syncing all Amplify data…'}
@@ -2193,7 +2194,7 @@ async function renderAmplifyView(){
       <div class="amplify-actions">${isAmplifyAdmin()?'<button class="amplify-btn secondary" id="amplifyParticipantBtn">Add employee</button><button class="amplify-btn secondary" id="amplifyConnectBtn">API connections</button>':''}</div></section>
     <section class="amplify-update-panel" aria-label="Amplify data updates">
       ${isAmplifyAdmin()?`<div class="amplify-update-group"><div class="amplify-update-head"><div><h3>API sync</h3><p>Run only the data source you need. Existing records are updated without creating duplicates.</p></div><span class="amplify-credit-pill">Uses credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-sync="activity"><strong>Employee activity</strong><span>Posts + reposts · 2 calls</span></button><button class="amplify-choice" data-amplify-sync="likes"><strong>Likes</strong><span>1 Apify call</span></button><button class="amplify-choice" data-amplify-sync="comments"><strong>Comments</strong><span>1 Apify call</span></button><button class="amplify-choice all" data-amplify-sync="all"><strong>Run all</strong><span>4 Apify calls</span></button></div></div>`:''}
-      <div class="amplify-update-group"><div class="amplify-update-head"><div><h3>Manual import</h3><p>Upload one export at a time, or use the combined tracker workbook.</p></div><span class="amplify-credit-pill free">No API credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-import="activity"><strong>Employee activity</strong><span>Activity Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="likes"><strong>Likes</strong><span>Likes Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="comments"><strong>Comments</strong><span>Comments Excel / JSON</span></button><button class="amplify-choice all" data-amplify-import="all"><strong>All-in-one</strong><span>Workbook / combined JSON</span></button></div><input id="amplifyFile" type="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden></div>
+      <div class="amplify-update-group"><div class="amplify-update-head"><div><h3>Manual import</h3><p>Upload one export at a time, or use the combined tracker workbook.</p></div><span class="amplify-credit-pill free">No API credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-import="activity"><strong>Employee posts</strong><span>Posts Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="reposts"><strong>Reposts</strong><span>Reposts JSON</span></button><button class="amplify-choice" data-amplify-import="likes"><strong>Likes</strong><span>Likes Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="comments"><strong>Comments</strong><span>Comments Excel / JSON</span></button><button class="amplify-choice all" data-amplify-import="all"><strong>All-in-one</strong><span>Workbook / combined JSON</span></button></div><input id="amplifyFile" type="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden></div>
     </section>
     <div class="amplify-status" id="amplifyStatus">${lastRun ? `Last sync ${amplifyDate(lastRun.finished_at||lastRun.started_at)} · ${escapeHTML(lastRun.message||lastRun.status)}` : 'Historical workbook imported · API sync is ready to configure'}</div>
     <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(participants.length || leaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
@@ -2232,18 +2233,19 @@ function amplifySourcePayloads(payload){
     return sources.map(source=>({mode:'sync-source',source}));
   }
   if(payload.mode === 'import'){
-    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : 'posts';
+    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : payload.importType === 'reposts' ? 'reposts' : 'posts';
     return [{mode:'import-source',source,items:payload.items,fileName:payload.fileName}];
   }
   if(payload.mode === 'import-source-workbook'){
-    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : 'posts';
+    const source = payload.importType === 'likes' ? 'likes' : payload.importType === 'comments' ? 'comments' : payload.importType === 'reposts' ? 'reposts' : 'posts';
     return [{mode:'import-source-workbook',source,fileBase64:payload.fileBase64,fileName:payload.fileName}];
   }
   return [payload];
 }
 async function runAmplifySync(payload,triggerButton=null){
   const buttons=[...document.querySelectorAll('[data-amplify-sync],[data-amplify-import]')]; const status=document.getElementById('amplifyStatus');
-  buttons.forEach(button=>button.disabled=true); if(status)status.textContent=payload.mode==='import'||payload.mode==='workbook'?`Importing ${AMPLIFY_UPDATE_TYPES[payload.importType||'all'].label.toLowerCase()}…`:AMPLIFY_UPDATE_TYPES[payload.syncType||'all'].working;
+  const isImport = ['import','workbook','import-source-workbook'].includes(payload.mode);
+  buttons.forEach(button=>button.disabled=true); if(status)status.textContent=isImport?`Importing ${AMPLIFY_UPDATE_TYPES[payload.importType||'all'].label.toLowerCase()}…`:AMPLIFY_UPDATE_TYPES[payload.syncType||'all'].working;
   try{
     const session=getStoredSession();
     const results=[];
