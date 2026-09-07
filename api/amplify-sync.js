@@ -14,6 +14,21 @@ const APIFY_BASE = 'https://api.apify.com/v2';
 function normalizeUrl(value='') {
   return String(value).trim().toLowerCase().replace(/^https?:\/\//,'').replace(/^www\./,'').split('?')[0].replace(/\/$/,'');
 }
+function cleanText(value='', max=300) {
+  return String(value || '').trim().slice(0, max);
+}
+function cleanLinkedInProfileUrl(value='') {
+  const raw = cleanText(value, 800);
+  if(!raw) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let parsed;
+  try{ parsed = new URL(withProtocol); }catch{ return ''; }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./,'');
+  if(host !== 'linkedin.com') return '';
+  const path = parsed.pathname.replace(/\/+$/,'');
+  if(!/^\/in\/[^/]+/i.test(path) && !/^\/company\/[^/]+/i.test(path)) return '';
+  return `https://www.linkedin.com${path}/`;
+}
 function activityId(value=''){return String(value).match(/(?:activity[:\/-]|urn:li:(?:ugcPost|activity):)(\d{10,})/i)?.[1]||'';}
 async function authenticate(authorization) {
   if (!authorization?.startsWith('Bearer ')) return null;
@@ -189,6 +204,18 @@ export default async function handler(request,response){
     }
     if(request.body?.mode==='save-connection'){
       const saved=await db('rpc/amplify_save_apify_connection',authorization,{method:'POST',body:JSON.stringify({p_task_id:request.body.taskId,p_token:request.body.apiToken})});return response.status(200).json({...saved?.[0],message:'Apify connection saved securely.'});
+    }
+    if(mode==='add-participant'){
+      const profileUrl=cleanLinkedInProfileUrl(request.body.profileUrl);
+      const fullName=cleanText(request.body.fullName,160);
+      const department=cleanText(request.body.department,120);
+      const aliases=Array.isArray(request.body.aliases)?request.body.aliases.map(cleanLinkedInProfileUrl).filter(Boolean):[];
+      if(!profileUrl)return response.status(400).json({error:'Enter a valid LinkedIn profile URL.'});
+      if(!fullName)return response.status(400).json({error:'Enter the employee full name.'});
+      const profileKey=normalizeUrl(profileUrl);
+      const uniqueAliases=[...new Set(aliases.map(normalizeUrl).filter(key=>key&&key!==profileKey))].map(key=>`https://${key}/`);
+      await db('amplify_participants?on_conflict=profile_key',authorization,{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify({profile_key:profileKey,profile_url:profileUrl,full_name:fullName,department,aliases:uniqueAliases,active:true,updated_at:new Date().toISOString()})});
+      return response.status(200).json({message:`${fullName} was added to the Amplify participant list.`,profileKey});
     }
     if(mode==='workbook'){
       const run=await db('amplify_sync_runs',authorization,{method:'POST',prefer:'return=representation',body:JSON.stringify({source:'tracker_xlsx_import',requested_by:user.id})});runId=run?.[0]?.id;

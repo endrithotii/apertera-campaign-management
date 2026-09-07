@@ -1193,6 +1193,26 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="amplifyParticipantOverlay">
+  <div class="modal" style="width:520px;">
+    <h2>Add Amplify employee</h2>
+    <p>Add someone to the participant list before running API syncs or imports. Their LinkedIn profile URL becomes the matching key for posts, likes, and comments.</p>
+    <label>Employee full name</label>
+    <input type="text" id="amplifyParticipantName" placeholder="e.g. Endrit Hoti" autocomplete="off">
+    <label style="margin-top:14px">LinkedIn profile URL</label>
+    <input type="url" id="amplifyParticipantUrl" placeholder="https://www.linkedin.com/in/..." autocomplete="off">
+    <label style="margin-top:14px">Department <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+    <input type="text" id="amplifyParticipantDepartment" placeholder="Marketing, Sales, etc." autocomplete="off">
+    <label style="margin-top:14px">Alias URLs <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional, one per line)</span></label>
+    <textarea id="amplifyParticipantAliases" rows="3" placeholder="Use this only if the same person appears with another LinkedIn URL in an export."></textarea>
+    <div class="modal-status" id="amplifyParticipantStatus"></div>
+    <div class="modal-actions">
+      <button class="ghost" id="amplifyParticipantCancel">Cancel</button>
+      <button class="primary" id="amplifyParticipantSave">Add employee</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="recoveredPointsOverlay">
   <div class="modal" style="width:560px;">
     <h2>Assign recovered points</h2>

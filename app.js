@@ -289,7 +289,10 @@ function isLikelyExpiringAssetUrl(url){
 // Shared across everyone via a small Supabase table (not per-browser localStorage).
 const SUPABASE_URL = 'https://dvxtykjmabmdlltsfjyu.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2eHR5a2ptYWJtZGxsdHNmanl1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIwMTQwMjgsImV4cCI6MjA3NzU5MDAyOH0.ax9ncCsFscpvNfNHX_fK1TVBWlle4npg6AWTChuqDWg';
-const SB_HEADERS = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` };
+function supabaseHeaders(extra = {}){
+  const session = typeof getStoredSession === 'function' ? getStoredSession() : null;
+  return { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session?.access_token || SUPABASE_ANON_KEY}`, ...extra };
+}
 
 let OVERRIDES_CACHE = {};
 let OVERRIDES_BY_EXTERNAL_ID = {};
@@ -303,7 +306,7 @@ const DURABLE_IMAGE_OVERRIDES = {
 
 async function fetchOverrides(){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides?select=ad_name,ad_external_id,image_url,image_storage_path,preview_url,cta_label,cta_url,feedback_note,feedback_applied,display_name`, { headers: SB_HEADERS });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides?select=ad_name,ad_external_id,image_url,image_storage_path,preview_url,cta_label,cta_url,feedback_note,feedback_applied,display_name`, { headers: supabaseHeaders() });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const rows = await res.json();
     const map = {};
@@ -311,7 +314,7 @@ async function fetchOverrides(){
     rows.forEach(r => {
       const value = { imageUrl: r.image_url || '', imageStoragePath: r.image_storage_path || '', previewUrl: r.preview_url || '', ctaLabel: r.cta_label || '', ctaUrl: r.cta_url || '', feedbackNote: r.feedback_note || '', feedbackApplied: !!r.feedback_applied, displayName: r.display_name || '', externalId: r.ad_external_id || '' };
       map[r.ad_name] = value;
-      if(r.ad_external_id) byExternalId[r.ad_external_id] = value;
+      if(r.ad_external_id) byExternalId[r.ad_external_id] = mergeOverrideValues(byExternalId[r.ad_external_id], value);
     });
     OVERRIDES_CACHE = map;
     OVERRIDES_BY_EXTERNAL_ID = byExternalId;
@@ -326,21 +329,50 @@ function getOverrides(){
   return OVERRIDES_CACHE;
 }
 
+function mergeOverrideValues(current = {}, next = {}){
+  const imageStoragePath = next.imageStoragePath || current.imageStoragePath || '';
+  const imageUrl = next.imageStoragePath
+    ? next.imageUrl
+    : current.imageStoragePath
+      ? current.imageUrl
+      : (next.imageUrl || current.imageUrl || '');
+  return {
+    imageUrl: imageUrl || '',
+    imageStoragePath,
+    previewUrl: next.previewUrl || current.previewUrl || '',
+    ctaLabel: next.ctaLabel || current.ctaLabel || '',
+    ctaUrl: next.ctaUrl || current.ctaUrl || '',
+    feedbackNote: next.feedbackNote || current.feedbackNote || '',
+    feedbackApplied: !!(next.feedbackApplied || current.feedbackApplied),
+    displayName: next.displayName || current.displayName || '',
+    externalId: next.externalId || current.externalId || ''
+  };
+}
+
+function overrideForAd(adOrName){
+  const ad = typeof adOrName === 'string' ? AD_INDEX[adOrName] : adOrName;
+  const adName = typeof adOrName === 'string' ? adOrName : ad?.name;
+  if(ad?.externalId && OVERRIDES_BY_EXTERNAL_ID[ad.externalId]) return OVERRIDES_BY_EXTERNAL_ID[ad.externalId];
+  return (adName && OVERRIDES_CACHE[adName]) || {};
+}
+
 async function saveOverride(adName, imageUrl, previewUrl, ctaLabel, ctaUrl, imageStoragePath=''){
-  const existing = OVERRIDES_CACHE[adName] || {};
-  const externalId = (AD_INDEX[adName] && AD_INDEX[adName].externalId) || existing.externalId || '';
+  const ad = AD_INDEX[adName] || {};
+  const existing = overrideForAd(adName);
+  const externalId = ad.externalId || existing.externalId || '';
   if(!imageUrl && !previewUrl && !ctaLabel && !ctaUrl && !existing.feedbackNote && !existing.feedbackApplied && !existing.displayName){
     await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides?ad_name=eq.${encodeURIComponent(adName)}`, {
-      method: 'DELETE', headers: SB_HEADERS
+      method: 'DELETE', headers: supabaseHeaders()
     });
     delete OVERRIDES_CACHE[adName];
     return;
   }
-  await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
     method: 'POST',
-    headers: { ...SB_HEADERS, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+    headers: supabaseHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }),
     body: JSON.stringify({ ad_name: adName, ad_external_id: externalId || null, image_url: imageUrl || '', image_storage_path: imageStoragePath || '', preview_url: previewUrl || '', cta_label: ctaLabel || '', cta_url: ctaUrl || '', updated_at: new Date().toISOString() })
   });
+  if(!res.ok) throw new Error(`Could not save preview override (HTTP ${res.status}).`);
   OVERRIDES_CACHE[adName] = { ...existing, externalId, imageUrl: imageUrl || '', imageStoragePath: imageStoragePath || '', previewUrl: previewUrl || '', ctaLabel: ctaLabel || '', ctaUrl: ctaUrl || '' };
   if(externalId) OVERRIDES_BY_EXTERNAL_ID[externalId] = OVERRIDES_CACHE[adName];
 }
@@ -355,8 +387,10 @@ async function uploadCreativeImage(adName, file){
   const ad = AD_INDEX[adName] || {};
   const identity = String(ad.externalId || adName).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').slice(0,100) || 'creative';
   const ext = ({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif'})[file.type.toLowerCase()];
-  const unique = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const digest = await fileDigestHex(file);
+  const unique = digest || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const path = `${identity}/${unique}.${ext}`;
+  const publicUrl = creativePublicUrl(path);
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${CREATIVE_BUCKET}/${encodeURIComponent(path).replace(/%2F/g,'/')}`, {
     method:'POST',
     headers:{ apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${session.access_token}`, 'Content-Type':file.type, 'Cache-Control':'31536000' },
@@ -365,29 +399,46 @@ async function uploadCreativeImage(adName, file){
   if(!res.ok){
     let message = `upload failed (HTTP ${res.status})`;
     try{ const data = await res.json(); message = data.message || data.error || message; } catch(e){}
+    if(res.status === 409 || /already exists/i.test(message)) return { path, url: publicUrl };
     throw new Error(message);
   }
-  return { path, url:`${SUPABASE_URL}/storage/v1/object/public/${CREATIVE_BUCKET}/${path.split('/').map(encodeURIComponent).join('/')}` };
+  return { path, url: publicUrl };
+}
+
+async function fileDigestHex(file){
+  if(!crypto?.subtle) return '';
+  const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2,'0')).join('');
+}
+
+function creativePublicUrl(path){
+  return `${SUPABASE_URL}/storage/v1/object/public/${CREATIVE_BUCKET}/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 async function saveDisplayName(adName, displayName){
-  const existing = OVERRIDES_CACHE[adName] || {};
+  const ad = AD_INDEX[adName] || {};
+  const existing = overrideForAd(adName);
+  const externalId = ad.externalId || existing.externalId || '';
   await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
     method: 'POST',
-    headers: { ...SB_HEADERS, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
-    body: JSON.stringify({ ad_name: adName, display_name: displayName || '', updated_at: new Date().toISOString() })
+    headers: supabaseHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }),
+    body: JSON.stringify({ ad_name: adName, ad_external_id: externalId || null, display_name: displayName || '', updated_at: new Date().toISOString() })
   });
-  OVERRIDES_CACHE[adName] = { ...existing, displayName: displayName || '' };
+  OVERRIDES_CACHE[adName] = { ...existing, externalId, displayName: displayName || '' };
+  if(externalId) OVERRIDES_BY_EXTERNAL_ID[externalId] = OVERRIDES_CACHE[adName];
 }
 
 async function setResolved(adName, applied){
+  const ad = AD_INDEX[adName] || {};
+  const existing = overrideForAd(adName) || { imageUrl: '', previewUrl: '' };
+  const externalId = ad.externalId || existing.externalId || '';
   await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
     method: 'POST',
-    headers: { ...SB_HEADERS, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
-    body: JSON.stringify({ ad_name: adName, feedback_applied: !!applied, updated_at: new Date().toISOString() })
+    headers: supabaseHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }),
+    body: JSON.stringify({ ad_name: adName, ad_external_id: externalId || null, feedback_applied: !!applied, updated_at: new Date().toISOString() })
   });
-  const existing = OVERRIDES_CACHE[adName] || { imageUrl: '', previewUrl: '' };
-  OVERRIDES_CACHE[adName] = { ...existing, feedbackApplied: !!applied };
+  OVERRIDES_CACHE[adName] = { ...existing, externalId, feedbackApplied: !!applied };
+  if(externalId) OVERRIDES_BY_EXTERNAL_ID[externalId] = OVERRIDES_CACHE[adName];
   if(applied){
     FEEDBACK_HISTORY[adName] = {
       resolvedAt: new Date().toISOString(),
@@ -405,7 +456,7 @@ let COMMENT_COUNTS = {};
 
 async function fetchCommentCounts(){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?select=id,ad_name`, { headers: SB_HEADERS });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?select=id,ad_name`, { headers: supabaseHeaders() });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const rows = await res.json();
     const counts = {};
@@ -421,7 +472,7 @@ async function fetchCommentCounts(){
 
 async function fetchComments(adName){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?ad_name=eq.${encodeURIComponent(adName)}&select=id,author,body,created_at&order=created_at.asc`, { headers: SB_HEADERS });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?ad_name=eq.${encodeURIComponent(adName)}&select=id,author,body,created_at&order=created_at.asc`, { headers: supabaseHeaders() });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     return await res.json();
   } catch(e){
@@ -433,13 +484,13 @@ async function fetchComments(adName){
 async function postComment(adName, author, body){
   await fetch(`${SUPABASE_URL}/rest/v1/ad_comments`, {
     method: 'POST',
-    headers: { ...SB_HEADERS, 'Content-Type': 'application/json' },
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ ad_name: adName, author, body })
   });
 }
 
 async function deleteComment(id){
-  await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?id=eq.${id}`, { method: 'DELETE', headers: SB_HEADERS });
+  await fetch(`${SUPABASE_URL}/rest/v1/ad_comments?id=eq.${id}`, { method: 'DELETE', headers: supabaseHeaders() });
 }
 
 function decodeJwtEmail(token){
@@ -456,7 +507,7 @@ function getCurrentUserEmail(){
 
 function applyOverride(ad){
   if(!ad || !ad.name) return ad;
-  const o = (ad.externalId && OVERRIDES_BY_EXTERNAL_ID[ad.externalId]) || getOverrides()[ad.name] || {};
+  const o = overrideForAd(ad);
   const durableSavedImage = o.imageStoragePath ? o.imageUrl : '';
   return {
     ...ad,
@@ -468,7 +519,9 @@ function applyOverride(ad){
     ctaUrl: o.ctaUrl || ad.url || '',
     feedbackNote: o.feedbackNote || '',
     feedbackApplied: !!o.feedbackApplied,
-    displayName: o.displayName || ''
+    displayName: o.displayName || '',
+    savedPreview: !!(o.imageUrl || o.previewUrl || o.ctaLabel || o.ctaUrl),
+    imageDurable: !!o.imageStoragePath
   };
 }
 function applyOverridesToData(data){
@@ -497,7 +550,7 @@ function applyOverridesToData(data){
 // ---------- shared app settings (sheet URL + pinned version) — same for everyone, stored in Supabase ----------
 async function getAppSetting(key){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`, { headers: SB_HEADERS });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`, { headers: supabaseHeaders() });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const rows = await res.json();
     return rows.length ? rows[0].value : '';
@@ -509,7 +562,7 @@ async function getAppSetting(key){
 async function setAppSetting(key, value){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
     method: 'POST',
-    headers: { ...SB_HEADERS, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+    headers: supabaseHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }),
     body: JSON.stringify({ key, value: value || '', updated_at: new Date().toISOString() })
   });
   if(!res.ok) throw new Error(`Could not save shared setting (HTTP ${res.status}).`);
@@ -607,7 +660,7 @@ async function saveDataVersion(data, label, source){
   try{
     await fetch(`${SUPABASE_URL}/rest/v1/data_versions`, {
       method: 'POST',
-      headers: { ...SB_HEADERS, 'Content-Type': 'application/json' },
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ label, source, data })
     });
   } catch(e){
@@ -616,7 +669,7 @@ async function saveDataVersion(data, label, source){
 }
 async function fetchVersions(){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/data_versions?select=id,created_at,label,source&order=created_at.desc&limit=30`, { headers: SB_HEADERS });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/data_versions?select=id,created_at,label,source&order=created_at.desc&limit=30`, { headers: supabaseHeaders() });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     return await res.json();
   } catch(e){
@@ -625,7 +678,7 @@ async function fetchVersions(){
   }
 }
 async function fetchVersionData(id){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/data_versions?id=eq.${id}&select=data`, { headers: SB_HEADERS });
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/data_versions?id=eq.${id}&select=data`, { headers: supabaseHeaders() });
   if(!res.ok) throw new Error('HTTP ' + res.status);
   const rows = await res.json();
   return rows.length ? rows[0].data : null;
@@ -1144,19 +1197,21 @@ async function openAdPreviewEditor(adName){
   document.getElementById('adPreviewOverlay').dataset.adName = adName;
   document.getElementById('adPreviewOverlay').classList.add('show');
   await fetchOverrides();
-  const existing = getOverrides()[adName] || {};
+  const ad = AD_INDEX[adName] || {};
+  const existing = overrideForAd(adName);
   document.getElementById('adImageUrlInput').value = existing.imageUrl || '';
   document.getElementById('adPreviewUrlInput').value = existing.previewUrl || '';
-  document.getElementById('adCtaLabelInput').value = existing.ctaLabel || (AD_INDEX[adName] && AD_INDEX[adName].cta) || '';
-  document.getElementById('adCtaUrlInput').value = existing.ctaUrl || (AD_INDEX[adName] && AD_INDEX[adName].url) || '';
-  const effectiveImage = existing.imageUrl || (AD_INDEX[adName] && AD_INDEX[adName].imageUrl) || '';
+  document.getElementById('adCtaLabelInput').value = existing.ctaLabel || ad.cta || '';
+  document.getElementById('adCtaUrlInput').value = existing.ctaUrl || ad.url || '';
+  const effectiveImage = existing.imageUrl || ad.imageUrl || '';
   const health = [];
   if(existing.imageStoragePath) health.push('Image: durable storage ✓');
   else if(effectiveImage && /(?:licdn\.com|linkedin\.com).*?(?:[?&](?:e|exp|expires)=|dms\/image)/i.test(effectiveImage)) health.push('Image: temporary LinkedIn link — upload the file to make it durable');
   else if(effectiveImage) health.push('Image: external URL');
   else health.push('Image: not added');
-  health.push(existing.previewUrl ? 'Preview link: saved ✓' : 'Preview link: using spreadsheet fallback');
-  health.push(existing.ctaUrl ? 'CTA destination: saved ✓' : 'CTA destination: using spreadsheet fallback');
+  health.push(existing.previewUrl ? 'Preview link: saved in DB ✓' : 'Preview link: using spreadsheet fallback');
+  health.push(existing.ctaUrl ? 'CTA destination: saved in DB ✓' : 'CTA destination: using spreadsheet fallback');
+  if(ad.externalId) health.push('Matched by creative ID ✓');
   document.getElementById('adAssetHealth').textContent = health.join(' · ');
   document.getElementById('adAssetHealth').className = 'modal-status ' + (existing.imageStoragePath ? 'ok' : '');
   document.getElementById('adPreviewStatus').textContent = '';
@@ -1350,12 +1405,15 @@ async function setCommentResolved(adName, commentId, resolved, comments){
   else delete FEEDBACK_HISTORY[adName];
   await setAppSetting(FEEDBACK_HISTORY_KEY, JSON.stringify(FEEDBACK_HISTORY));
   const activeCount = comments.filter(comment => !commentMap[String(comment.id)]).length;
+  const ad = AD_INDEX[adName] || {};
+  const existing = overrideForAd(adName) || {imageUrl:'',previewUrl:''};
+  const externalId = ad.externalId || existing.externalId || '';
   await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
-    method:'POST', headers:{...SB_HEADERS,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'},
-    body:JSON.stringify({ad_name:adName,feedback_applied:comments.length > 0 && activeCount === 0,updated_at:new Date().toISOString()})
+    method:'POST', headers:supabaseHeaders({'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'}),
+    body:JSON.stringify({ad_name:adName,ad_external_id:externalId || null,feedback_applied:comments.length > 0 && activeCount === 0,updated_at:new Date().toISOString()})
   });
-  const existing = OVERRIDES_CACHE[adName] || {imageUrl:'',previewUrl:''};
-  OVERRIDES_CACHE[adName] = {...existing,feedbackApplied:comments.length > 0 && activeCount === 0};
+  OVERRIDES_CACHE[adName] = {...existing,externalId,feedbackApplied:comments.length > 0 && activeCount === 0};
+  if(externalId) OVERRIDES_BY_EXTERNAL_ID[externalId] = OVERRIDES_CACHE[adName];
   COMMENT_COUNTS[adName] = activeCount;
 }
 function commentsHTML(comments, mode='active'){
@@ -1434,12 +1492,16 @@ document.getElementById('adFeedbackSave').addEventListener('click', async () => 
   try{
     const author = getCurrentUserEmail() || 'Team';
     await postComment(adName, author, body);
-    if(OVERRIDES_CACHE[adName] && OVERRIDES_CACHE[adName].feedbackApplied){
+    if(overrideForAd(adName).feedbackApplied){
+      const ad = AD_INDEX[adName] || {};
+      const existing = overrideForAd(adName);
+      const externalId = ad.externalId || existing.externalId || '';
       await fetch(`${SUPABASE_URL}/rest/v1/ad_overrides`, {
-        method:'POST', headers:{...SB_HEADERS,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'},
-        body:JSON.stringify({ad_name:adName,feedback_applied:false,updated_at:new Date().toISOString()})
+        method:'POST', headers:supabaseHeaders({'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'}),
+        body:JSON.stringify({ad_name:adName,ad_external_id:externalId || null,feedback_applied:false,updated_at:new Date().toISOString()})
       });
-      OVERRIDES_CACHE[adName] = {...OVERRIDES_CACHE[adName],feedbackApplied:false};
+      OVERRIDES_CACHE[adName] = {...OVERRIDES_CACHE[adName],externalId,feedbackApplied:false};
+      if(externalId) OVERRIDES_BY_EXTERNAL_ID[externalId] = OVERRIDES_CACHE[adName];
     }
     document.getElementById('adFeedbackNoteInput').value = '';
     statusEl.textContent = '';
@@ -1901,6 +1963,35 @@ async function reverseRecoveredPoints(id){
 async function amplifyConnectionRequest(payload){
   const session=getStoredSession();const res=await fetch('/api/amplify-sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token||''}`},body:JSON.stringify(payload)});const result=await res.json();if(!res.ok)throw new Error(result.error||'Connection request failed.');return result;
 }
+function openAmplifyParticipant(){
+  const overlay=document.getElementById('amplifyParticipantOverlay');
+  document.getElementById('amplifyParticipantName').value='';
+  document.getElementById('amplifyParticipantUrl').value='';
+  document.getElementById('amplifyParticipantDepartment').value='';
+  document.getElementById('amplifyParticipantAliases').value='';
+  document.getElementById('amplifyParticipantStatus').textContent='';
+  document.getElementById('amplifyParticipantStatus').className='modal-status';
+  overlay.classList.add('show');
+}
+function closeAmplifyParticipant(){document.getElementById('amplifyParticipantOverlay').classList.remove('show');}
+async function saveAmplifyParticipant(){
+  const status=document.getElementById('amplifyParticipantStatus'),button=document.getElementById('amplifyParticipantSave');
+  const fullName=document.getElementById('amplifyParticipantName').value.trim();
+  const profileUrl=document.getElementById('amplifyParticipantUrl').value.trim();
+  const department=document.getElementById('amplifyParticipantDepartment').value.trim();
+  const aliases=document.getElementById('amplifyParticipantAliases').value.split(/\n+/).map(value=>value.trim()).filter(Boolean);
+  if(!fullName){status.textContent='Enter the employee full name.';status.className='modal-status bad';return;}
+  if(!profileUrl){status.textContent='Enter the LinkedIn profile URL.';status.className='modal-status bad';return;}
+  button.disabled=true;status.textContent='Adding employee…';status.className='modal-status';
+  try{
+    const result=await amplifyConnectionRequest({mode:'add-participant',fullName,profileUrl,department,aliases});
+    status.textContent=result.message;status.className='modal-status ok';
+    AMPLIFY_DATA.loaded=false;
+    await loadAmplifyData(true);
+    setTimeout(()=>{closeAmplifyParticipant();if(currentView==='amplify')renderAmplifyView();},700);
+  }catch(error){status.textContent=error.message;status.className='modal-status bad';}
+  finally{button.disabled=false;}
+}
 async function openAmplifyConnection(){
   const overlay=document.getElementById('amplifyConnectionOverlay'),status=document.getElementById('amplifyConnectionStatus');overlay.classList.add('show');status.textContent='Checking saved connection…';status.className='modal-status';document.getElementById('amplifyApiToken').value='';
   try{const saved=await amplifyConnectionRequest({mode:'connection-status'});document.getElementById('amplifyTaskId').value=saved.task_id||'RS6sriGQCVOsTrDUW';status.textContent=saved.connected?'Connected securely · enter a token only to replace it.':'Not connected yet.';status.className=`modal-status ${saved.connected?'ok':''}`;}catch(e){status.textContent=e.message;status.className='modal-status bad';}
@@ -1909,6 +2000,9 @@ function closeAmplifyConnection(){document.getElementById('amplifyConnectionOver
 document.getElementById('amplifyConnectionCancel').onclick=closeAmplifyConnection;
 document.getElementById('amplifyConnectionOverlay').addEventListener('click',e=>{if(e.target.id==='amplifyConnectionOverlay')closeAmplifyConnection();});
 document.getElementById('amplifyConnectionSave').onclick=async()=>{const taskId=document.getElementById('amplifyTaskId').value.trim(),apiToken=document.getElementById('amplifyApiToken').value.trim(),status=document.getElementById('amplifyConnectionStatus'),button=document.getElementById('amplifyConnectionSave');if(!taskId||!apiToken){status.textContent='Enter both the Task ID and API token.';status.className='modal-status bad';return;}button.disabled=true;status.textContent='Encrypting and saving…';status.className='modal-status';try{const result=await amplifyConnectionRequest({mode:'save-connection',taskId,apiToken});status.textContent=result.message;status.className='modal-status ok';document.getElementById('amplifyApiToken').value='';setTimeout(closeAmplifyConnection,900);}catch(e){status.textContent=e.message;status.className='modal-status bad';}finally{button.disabled=false;}};
+document.getElementById('amplifyParticipantCancel').onclick=closeAmplifyParticipant;
+document.getElementById('amplifyParticipantSave').onclick=saveAmplifyParticipant;
+document.getElementById('amplifyParticipantOverlay').addEventListener('click',event=>{if(event.target.id==='amplifyParticipantOverlay')closeAmplifyParticipant();});
 document.getElementById('recoveredPointsCancel').onclick=closeRecoveredPoints;
 document.getElementById('recoveredPointsSave').onclick=saveRecoveredPoints;
 document.getElementById('recoveredType').onchange=event=>{document.getElementById('recoveredPoints').value=recoveredDefaultPoints(event.target.value);};
@@ -1929,7 +2023,7 @@ async function renderAmplifyView(){
   const lastRun = runs.find(run=>run.status==='success'||run.status==='partial') || null;
   content.innerHTML=`<div class="amplify-shell">
     <section class="amplify-hero"><div><div class="amplify-kicker">Employee advocacy</div><h2>Apertera Amplify Challenge</h2><p>A standalone challenge tracking employee posts, reposts, likes, comments and Marketing's Pick bonuses. Its scores never affect paid campaign reporting.</p></div>
-      <div class="amplify-actions">${isAmplifyAdmin()?'<button class="amplify-btn secondary" id="amplifyConnectBtn">API connections</button>':''}</div></section>
+      <div class="amplify-actions">${isAmplifyAdmin()?'<button class="amplify-btn secondary" id="amplifyParticipantBtn">Add employee</button><button class="amplify-btn secondary" id="amplifyConnectBtn">API connections</button>':''}</div></section>
     <section class="amplify-update-panel" aria-label="Amplify data updates">
       ${isAmplifyAdmin()?`<div class="amplify-update-group"><div class="amplify-update-head"><div><h3>API sync</h3><p>Run only the data source you need. Existing records are updated without creating duplicates.</p></div><span class="amplify-credit-pill">Uses credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-sync="activity"><strong>Employee activity</strong><span>Posts + reposts · 2 calls</span></button><button class="amplify-choice" data-amplify-sync="likes"><strong>Likes</strong><span>1 Apify call</span></button><button class="amplify-choice" data-amplify-sync="comments"><strong>Comments</strong><span>1 Apify call</span></button><button class="amplify-choice all" data-amplify-sync="all"><strong>Run all</strong><span>4 Apify calls</span></button></div></div>`:''}
       <div class="amplify-update-group"><div class="amplify-update-head"><div><h3>Manual import</h3><p>Upload one export at a time, or use the combined tracker workbook.</p></div><span class="amplify-credit-pill free">No API credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-import="activity"><strong>Employee activity</strong><span>Activity Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="likes"><strong>Likes</strong><span>Likes Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="comments"><strong>Comments</strong><span>Comments Excel / JSON</span></button><button class="amplify-choice all" data-amplify-import="all"><strong>All-in-one</strong><span>Workbook / combined JSON</span></button></div><input id="amplifyFile" type="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden></div>
@@ -1947,6 +2041,7 @@ async function renderAmplifyView(){
     runAmplifySync({mode:'configured',syncType},button);
   });
   if(document.getElementById('amplifyConnectBtn'))document.getElementById('amplifyConnectBtn').onclick=openAmplifyConnection;
+  if(document.getElementById('amplifyParticipantBtn'))document.getElementById('amplifyParticipantBtn').onclick=openAmplifyParticipant;
   document.querySelectorAll('[data-amplify-adjust]').forEach(button=>button.onclick=()=>openRecoveredPoints(leaderboard[Number(button.dataset.amplifyAdjust)]));
   document.querySelectorAll('[data-amplify-import]').forEach(button=>button.onclick=()=>{amplifyImportType=button.dataset.amplifyImport;document.getElementById('amplifyFile').click();});
   document.getElementById('amplifyFile').onchange=async event=>{
@@ -3100,7 +3195,7 @@ document.getElementById('settingsOverlay').addEventListener('click', (e) => {
   if(e.target.id === 'settingsOverlay') closeSettings();
 });
 document.addEventListener('keydown', (e) => {
-  if(e.key === 'Escape'){ closeMobileNav(); closePanel(); closeSettings(); closeAmplifyConnection(); closeRecoveredPoints(); closeLockedModal(); closeAdPreviewEditor(); closeAdFeedbackEditor(); closeAdBigPreview(); closeCompareModal(); closeAIAnalysis(); }
+  if(e.key === 'Escape'){ closeMobileNav(); closePanel(); closeSettings(); closeAmplifyConnection(); closeAmplifyParticipant(); closeRecoveredPoints(); closeLockedModal(); closeAdPreviewEditor(); closeAdFeedbackEditor(); closeAdBigPreview(); closeCompareModal(); closeAIAnalysis(); }
 });
 
 // ---------- toolbar behavior ----------
