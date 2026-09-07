@@ -217,6 +217,15 @@ export default async function handler(request,response){
       await db('amplify_participants?on_conflict=profile_key',authorization,{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify({profile_key:profileKey,profile_url:profileUrl,full_name:fullName,department,aliases:uniqueAliases,active:true,updated_at:new Date().toISOString()})});
       return response.status(200).json({message:`${fullName} was added to the Amplify participant list.`,profileKey});
     }
+    if(mode==='update-participant-department'){
+      if(String(user.email||'').toLowerCase()!=='growth@apertera.com')return response.status(403).json({error:'Only Amplify admins can update departments.'});
+      const profileKey=normalizeUrl(request.body.profileKey);
+      const department=cleanText(request.body.department,120);
+      if(!profileKey)return response.status(400).json({error:'Choose a valid employee.'});
+      const updated=await db(`amplify_participants?profile_key=eq.${encodeURIComponent(profileKey)}`,authorization,{method:'PATCH',prefer:'return=representation',body:JSON.stringify({department,updated_at:new Date().toISOString()})});
+      if(!updated?.length)return response.status(404).json({error:'Employee was not found.'});
+      return response.status(200).json({message:`${updated[0].full_name}'s department was updated.`,participant:updated[0]});
+    }
     if(mode==='workbook'){
       const run=await db('amplify_sync_runs',authorization,{method:'POST',prefer:'return=representation',body:JSON.stringify({source:'tracker_xlsx_import',requested_by:user.id})});runId=run?.[0]?.id;
       const counts=await importTracker(await parseWorkbook(request.body.fileBase64),authorization,user);const message=`Imported ${counts.people} participants, ${counts.posts} posts, ${counts.interactions} interactions and ${counts.bonuses} bonuses from ${request.body.fileName||'workbook'}.`;

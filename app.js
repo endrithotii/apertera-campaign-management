@@ -1875,6 +1875,7 @@ const AMPLIFY_DEPARTMENTS = [
   { name:'Tech', total:39, color:'#6d7a90' },
   { name:'Product', total:7, color:'#a57bd9' }
 ];
+const AMPLIFY_DEPARTMENT_OPTIONS = AMPLIFY_DEPARTMENTS.map(dept=>dept.name);
 let AMPLIFY_DATA = { leaderboard:[], posts:[], participants:[], config:null, runs:[], loaded:false, error:'' };
 function amplifyHeaders(extra={}){
   const session = getStoredSession();
@@ -1945,6 +1946,10 @@ function departmentPieGradient(rows){
 }
 function renderAmplifyDepartmentView(participants){
   const stats = amplifyDepartmentStats(participants);
+  const sortedParticipants = [...participants].sort((a,b)=>
+    normalizeAmplifyDepartment(a.department).localeCompare(normalizeAmplifyDepartment(b.department)) ||
+    String(a.full_name||'').localeCompare(String(b.full_name||''))
+  );
   return `<section class="amplify-dept-grid">
     <div class="amplify-panel amplify-dept-panel">
       <div class="amplify-panel-head"><h3>Department participation</h3><span>${fmtInt(stats.totalRegistered)} of ${fmtInt(stats.totalEmployees)} registered</span></div>
@@ -1958,6 +1963,15 @@ function renderAmplifyDepartmentView(participants){
       <div class="amplify-panel-head"><h3>Headcount by department</h3><span>Based on total employees</span></div>
       <div class="amplify-chart-body"><div class="amplify-pie" style="background:conic-gradient(${departmentPieGradient(stats.rows)})"></div>
         <div class="amplify-legend">${stats.rows.map(row=>`<div><span style="background:${row.color}"></span><b>${escapeHTML(row.name)}</b><em>${fmtInt(row.total)}</em></div>`).join('')}</div></div>
+    </div>
+    <div class="amplify-panel amplify-employee-panel">
+      <div class="amplify-panel-head"><h3>Employee departments</h3><span>${fmtInt(sortedParticipants.length)} employees</span></div>
+      <div class="amplify-table-wrap"><table class="amplify-table amplify-employee-table"><thead><tr><th>Employee</th><th>Department</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>
+        ${sortedParticipants.map(row=>{
+          const dept = normalizeAmplifyDepartment(row.department);
+          return `<tr><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${dept ? escapeHTML(dept) : '<span class="amplify-missing-dept">Missing</span>'}</td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-department="${escapeHTML(row.profile_key)}">Edit</button></td>`:''}</tr>`;
+        }).join('')}
+      </tbody></table></div>
     </div>
   </section>`;
 }
@@ -2063,6 +2077,30 @@ async function saveAmplifyParticipant(){
   }catch(error){status.textContent=error.message;status.className='modal-status bad';}
   finally{button.disabled=false;}
 }
+async function editAmplifyDepartment(profileKey){
+  if(!isAmplifyAdmin())return;
+  const participant=AMPLIFY_DATA.participants.find(row=>row.profile_key===profileKey);
+  if(!participant)return;
+  const current=normalizeAmplifyDepartment(participant.department);
+  const options=AMPLIFY_DEPARTMENT_OPTIONS.join('\n');
+  const next=window.prompt(`Department for ${participant.full_name}\n\nUse one of these:\n${options}\n\nLeave empty to mark as missing.`, current);
+  if(next===null)return;
+  const normalized=normalizeAmplifyDepartment(next);
+  if(normalized && !AMPLIFY_DEPARTMENT_OPTIONS.includes(normalized)){
+    alert('Please use one of the existing department names shown in the prompt.');
+    return;
+  }
+  try{
+    const result=await amplifyConnectionRequest({mode:'update-participant-department',profileKey,department:normalized});
+    AMPLIFY_DATA.loaded=false;
+    await loadAmplifyData(true);
+    if(currentView==='amplify')renderAmplifyView();
+    const nextStatus=document.getElementById('amplifyStatus');
+    if(nextStatus)nextStatus.textContent=result.message;
+  }catch(error){
+    alert(error.message || 'Could not update department.');
+  }
+}
 async function openAmplifyConnection(){
   const overlay=document.getElementById('amplifyConnectionOverlay'),status=document.getElementById('amplifyConnectionStatus');overlay.classList.add('show');status.textContent='Checking saved connection…';status.className='modal-status';document.getElementById('amplifyApiToken').value='';
   try{const saved=await amplifyConnectionRequest({mode:'connection-status'});document.getElementById('amplifyTaskId').value=saved.task_id||'RS6sriGQCVOsTrDUW';status.textContent=saved.connected?'Connected securely · enter a token only to replace it.':'Not connected yet.';status.className=`modal-status ${saved.connected?'ok':''}`;}catch(e){status.textContent=e.message;status.className='modal-status bad';}
@@ -2114,6 +2152,7 @@ async function renderAmplifyView(){
   });
   if(document.getElementById('amplifyConnectBtn'))document.getElementById('amplifyConnectBtn').onclick=openAmplifyConnection;
   if(document.getElementById('amplifyParticipantBtn'))document.getElementById('amplifyParticipantBtn').onclick=openAmplifyParticipant;
+  document.querySelectorAll('[data-amplify-department]').forEach(button=>button.onclick=()=>editAmplifyDepartment(button.dataset.amplifyDepartment));
   document.querySelectorAll('[data-amplify-adjust]').forEach(button=>button.onclick=()=>openRecoveredPoints(leaderboard[Number(button.dataset.amplifyAdjust)]));
   document.querySelectorAll('[data-amplify-import]').forEach(button=>button.onclick=()=>{amplifyImportType=button.dataset.amplifyImport;document.getElementById('amplifyFile').click();});
   document.getElementById('amplifyFile').onchange=async event=>{
