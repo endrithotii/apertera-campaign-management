@@ -2003,8 +2003,9 @@ function departmentPieGradient(rows){
   }).join(',');
 }
 function renderAmplifyDepartmentView(participants){
+  const activeParticipants = participants.filter(row=>row.active !== false);
   const stats = amplifyDepartmentStats(participants);
-  const sortedParticipants = [...participants].sort((a,b)=>
+  const sortedParticipants = [...activeParticipants].sort((a,b)=>
     normalizeAmplifyDepartment(a.department).localeCompare(normalizeAmplifyDepartment(b.department)) ||
     String(a.full_name||'').localeCompare(String(b.full_name||''))
   );
@@ -2027,7 +2028,7 @@ function renderAmplifyDepartmentView(participants){
       <div class="amplify-table-wrap"><table class="amplify-table amplify-employee-table"><thead><tr><th>Employee</th><th>Department</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>
         ${sortedParticipants.map(row=>{
           const dept = normalizeAmplifyDepartment(row.department);
-          return `<tr><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${dept ? escapeHTML(dept) : '<span class="amplify-missing-dept">Missing</span>'}</td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-department="${escapeHTML(row.profile_key)}">Edit</button></td>`:''}</tr>`;
+          return `<tr><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${dept ? escapeHTML(dept) : '<span class="amplify-missing-dept">Missing</span>'}</td>${isAmplifyAdmin()?`<td><div class="amplify-employee-actions"><button class="amplify-assign-btn" data-amplify-department="${escapeHTML(row.profile_key)}">Edit</button><button class="amplify-assign-btn amplify-remove-btn" data-amplify-remove="${escapeHTML(row.profile_key)}">Remove</button></div></td>`:''}</tr>`;
         }).join('')}
       </tbody></table></div>
     </div>
@@ -2160,6 +2161,22 @@ async function editAmplifyDepartment(profileKey){
     alert(error.message || 'Could not update department.');
   }
 }
+async function removeAmplifyParticipant(profileKey){
+  if(!isAmplifyAdmin())return;
+  const participant=AMPLIFY_DATA.participants.find(row=>row.profile_key===profileKey);
+  if(!participant)return;
+  if(!window.confirm(`Remove ${participant.full_name} from the active Amplify employee list?\n\nTheir historical scoring records will stay saved, but they will no longer appear as a current employee.`))return;
+  try{
+    const result=await amplifyConnectionRequest({mode:'remove-participant',profileKey});
+    AMPLIFY_DATA.loaded=false;
+    await loadAmplifyData(true);
+    if(currentView==='amplify')renderAmplifyView();
+    const nextStatus=document.getElementById('amplifyStatus');
+    if(nextStatus)nextStatus.textContent=result.message;
+  }catch(error){
+    alert(error.message || 'Could not remove employee.');
+  }
+}
 async function openAmplifyConnection(){
   const overlay=document.getElementById('amplifyConnectionOverlay'),status=document.getElementById('amplifyConnectionStatus');overlay.classList.add('show');status.textContent='Checking saved connection…';status.className='modal-status';document.getElementById('amplifyApiToken').value='';
   try{const saved=await amplifyConnectionRequest({mode:'connection-status'});document.getElementById('amplifyTaskId').value=saved.task_id||'RS6sriGQCVOsTrDUW';status.textContent=saved.connected?'Connected securely · enter a token only to replace it.':'Not connected yet.';status.className=`modal-status ${saved.connected?'ok':''}`;}catch(e){status.textContent=e.message;status.className='modal-status bad';}
@@ -2183,9 +2200,12 @@ async function renderAmplifyView(){
     if(currentView !== 'amplify') return;
   }
   const {leaderboard,posts,participants,config,runs,error}=AMPLIFY_DATA;
-  document.getElementById('amplify-nav-count').textContent = participants.length || leaderboard.length || '0';
+  const activeParticipants = participants.filter(row=>row.active !== false);
+  const activeParticipantKeys = new Set(activeParticipants.map(row=>row.profile_key));
+  const visibleLeaderboard = activeParticipantKeys.size ? leaderboard.filter(row=>activeParticipantKeys.has(row.profile_key)) : leaderboard;
+  document.getElementById('amplify-nav-count').textContent = activeParticipants.length || visibleLeaderboard.length || '0';
   if(error){ content.innerHTML=`<div class="amplify-empty">Could not load Amplify Challenge: ${escapeHTML(error)}</div>`; return; }
-  const active = leaderboard.filter(row=>Number(row.total_points)>0);
+  const active = visibleLeaderboard.filter(row=>Number(row.total_points)>0);
   const totalPoints = active.reduce((sum,row)=>sum+Number(row.total_points||0),0);
   const entries = active.reduce((sum,row)=>sum+Number(row.entries||0),0);
   const lastRun = runs.find(run=>run.status==='success'||run.status==='partial') || null;
@@ -2197,9 +2217,9 @@ async function renderAmplifyView(){
       <div class="amplify-update-group"><div class="amplify-update-head"><div><h3>Manual import</h3><p>Upload one export at a time, or use the combined tracker workbook.</p></div><span class="amplify-credit-pill free">No API credits</span></div><div class="amplify-choice-grid"><button class="amplify-choice" data-amplify-import="activity"><strong>Employee posts</strong><span>Posts Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="reposts"><strong>Reposts</strong><span>Reposts JSON</span></button><button class="amplify-choice" data-amplify-import="likes"><strong>Likes</strong><span>Likes Excel / JSON</span></button><button class="amplify-choice" data-amplify-import="comments"><strong>Comments</strong><span>Comments Excel / JSON</span></button><button class="amplify-choice all" data-amplify-import="all"><strong>All-in-one</strong><span>Workbook / combined JSON</span></button></div><input id="amplifyFile" type="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden></div>
     </section>
     <div class="amplify-status" id="amplifyStatus">${lastRun ? `Last sync ${amplifyDate(lastRun.finished_at||lastRun.started_at)} · ${escapeHTML(lastRun.message||lastRun.status)}` : 'Historical workbook imported · API sync is ready to configure'}</div>
-    <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(participants.length || leaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
+    <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(activeParticipants.length || visibleLeaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
     ${renderAmplifyDepartmentView(participants)}
-    <div class="amplify-grid"><section class="amplify-panel"><div class="amplify-panel-head"><h3>Leaderboard</h3><span>${active.length} scoring participants</span></div><div class="amplify-table-wrap"><table class="amplify-table"><thead><tr><th>#</th><th>Participant</th><th>Posts</th><th>Interactions</th><th>Recovered</th><th>Marketing's Pick</th><th>Total</th><th>Entries</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>${leaderboard.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${fmtInt(row.post_points)}</td><td>${fmtInt(row.interaction_points)}</td><td>${fmtInt(row.recovered_points)}</td><td>${fmtInt(row.marketing_pick_points)}</td><td class="amplify-total">${fmtInt(row.total_points)}</td><td><span class="amplify-entry">${fmtInt(row.entries)}</span></td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-adjust="${index}">+ Assign</button></td>`:''}</tr>`).join('')}</tbody></table></div></section>
+    <div class="amplify-grid"><section class="amplify-panel"><div class="amplify-panel-head"><h3>Leaderboard</h3><span>${active.length} scoring participants</span></div><div class="amplify-table-wrap"><table class="amplify-table"><thead><tr><th>#</th><th>Participant</th><th>Posts</th><th>Interactions</th><th>Recovered</th><th>Marketing's Pick</th><th>Total</th><th>Entries</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>${visibleLeaderboard.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${fmtInt(row.post_points)}</td><td>${fmtInt(row.interaction_points)}</td><td>${fmtInt(row.recovered_points)}</td><td>${fmtInt(row.marketing_pick_points)}</td><td class="amplify-total">${fmtInt(row.total_points)}</td><td><span class="amplify-entry">${fmtInt(row.entries)}</span></td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-adjust="${index}">+ Assign</button></td>`:''}</tr>`).join('')}</tbody></table></div></section>
       <div><section class="amplify-panel"><div class="amplify-panel-head"><h3>Scoring rules</h3><span>Current</span></div><div class="amplify-rule-list"><div class="amplify-rule">Original Apertera post <b>+${config?.post_points||15}</b></div><div class="amplify-rule">Repost / share <b>+${config?.repost_points||5}</b></div><div class="amplify-rule">Like company post <b>+${config?.like_points||3}</b></div><div class="amplify-rule">Comment on company post <b>+${config?.comment_points||5}</b></div><div class="amplify-rule">Marketing's Pick <b>+${config?.marketing_pick_points||20}</b></div></div></section>
       <section class="amplify-panel" style="margin-top:18px"><div class="amplify-panel-head"><h3>Recent scoring posts</h3><span>${posts.length} shown</span></div><div class="amplify-feed">${posts.length?posts.map(post=>`<div class="amplify-post"><div class="amplify-post-top"><strong>${escapeHTML(post.full_name)}</strong><span>${post.is_repost?'Repost':'Post'} · ${amplifyDate(post.posted_at)||escapeHTML(post.post_date_label)}</span><a class="amplify-post-score" href="${escapeHTML(post.post_url)}" target="_blank" rel="noopener noreferrer">+${post.score}</a></div><div class="amplify-post-copy">${escapeHTML(post.content)}</div></div>`).join(''):'<div class="amplify-empty">No scoring posts yet.</div>'}</div></section></div>
     </div></div>`;
@@ -2212,7 +2232,8 @@ async function renderAmplifyView(){
   if(document.getElementById('amplifyConnectBtn'))document.getElementById('amplifyConnectBtn').onclick=openAmplifyConnection;
   if(document.getElementById('amplifyParticipantBtn'))document.getElementById('amplifyParticipantBtn').onclick=openAmplifyParticipant;
   document.querySelectorAll('[data-amplify-department]').forEach(button=>button.onclick=()=>editAmplifyDepartment(button.dataset.amplifyDepartment));
-  document.querySelectorAll('[data-amplify-adjust]').forEach(button=>button.onclick=()=>openRecoveredPoints(leaderboard[Number(button.dataset.amplifyAdjust)]));
+  document.querySelectorAll('[data-amplify-remove]').forEach(button=>button.onclick=()=>removeAmplifyParticipant(button.dataset.amplifyRemove));
+  document.querySelectorAll('[data-amplify-adjust]').forEach(button=>button.onclick=()=>openRecoveredPoints(visibleLeaderboard[Number(button.dataset.amplifyAdjust)]));
   document.querySelectorAll('[data-amplify-import]').forEach(button=>button.onclick=()=>{amplifyImportType=button.dataset.amplifyImport;document.getElementById('amplifyFile').click();});
   document.getElementById('amplifyFile').onchange=async event=>{
     const file=event.target.files[0]; if(!file)return;

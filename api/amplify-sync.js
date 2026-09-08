@@ -181,9 +181,11 @@ async function parseSourceWorkbook(base64){
   return sheetObjects(workbook.worksheets[0]).map(expandDottedRow);
 }
 async function importTracker(data,authorization,user){
-  const people=data.people.map(row=>{const url=row['LinkedIn Profile URL'];const aliases=String(row['Phantom Profile URL']||'').split(/\s+/).filter(Boolean);return {profile_key:normalizeUrl(url),profile_url:url,full_name:row['Full Name'],department:row.Department||'',aliases,active:true,updated_at:new Date().toISOString()};}).filter(x=>x.profile_key&&x.full_name);
+  const existingPeople=await db('amplify_participants?select=profile_key,active',authorization);
+  const inactivePeople=new Set(existingPeople.filter(row=>row.active===false).map(row=>row.profile_key));
+  const people=data.people.map(row=>{const url=row['LinkedIn Profile URL'];const aliases=String(row['Phantom Profile URL']||'').split(/\s+/).filter(Boolean);const profileKey=normalizeUrl(url);return {profile_key:profileKey,profile_url:url,full_name:row['Full Name'],department:row.Department||'',aliases,active:!inactivePeople.has(profileKey),updated_at:new Date().toISOString()};}).filter(x=>x.profile_key&&x.full_name);
   if(people.length)await db('amplify_participants?on_conflict=profile_key',authorization,{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify(people)});
-  const participants=await db('amplify_participants?select=profile_key,profile_url,full_name,aliases',authorization); const directory=participantDirectory(participants);
+  const participants=await db('amplify_participants?select=profile_key,profile_url,full_name,aliases&active=is.true',authorization); const directory=participantDirectory(participants);
   const posts=data.posts.map(row=>{const person=directory.resolve(row['Profile URL'],row['Full Name']);const url=row['Post URL'];if(!person||!url)return null;return {post_key:normalizeUrl(url),participant_key:person.profile_key,post_url:url,full_name:person.full_name,like_count:Number(row['Like Count']||0),comment_count:Number(row['Comment Count']||0),post_date_label:row['Post Date']||'',content:row['Post Content']||'',own_content:row['Own Content']||'',shared_post_url:row['Shared Post URL']||'',action:row.Action||'Post',is_repost:String(row['Is Repost']).toUpperCase()==='YES',has_apertera:String(row['Has Apertera']).toUpperCase()==='YES',posted_at:row['Post Timestamp']||null,score:Number(row.Score||0),source:'tracker_xlsx',raw:row};}).filter(Boolean);
   const interactions=data.interactions.map(row=>{const person=directory.resolve(row['Profile URL'],row['Full Name']);const post=row['Post URL'],action=String(row.Action||'').toLowerCase();if(!person||!post||!action)return null;return {interaction_key:`${person.profile_key}|${normalizeUrl(post)}|${action}`,participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,post_url:post,action,occurred_at:row.Timestamp||null,score:Number(row.Score||0),source:'tracker_xlsx',raw:row};}).filter(Boolean);
   const bonuses=data.bonuses.map(row=>{const person=directory.resolve(row['Profile URL'],row['Full Name']);const reason=row.Reason||"Marketing's Pick";if(!person||!Number(row['Bonus Points']))return null;return {participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,reason,points:Number(row['Bonus Points']),awarded_at:row['Awarded Date']||null,awarded_by:user.id};}).filter(Boolean);
@@ -226,6 +228,14 @@ export default async function handler(request,response){
       if(!updated?.length)return response.status(404).json({error:'Employee was not found.'});
       return response.status(200).json({message:`${updated[0].full_name}'s department was updated.`,participant:updated[0]});
     }
+    if(mode==='remove-participant'){
+      if(String(user.email||'').toLowerCase()!=='growth@apertera.com')return response.status(403).json({error:'Only Amplify admins can remove employees.'});
+      const profileKey=normalizeUrl(request.body.profileKey);
+      if(!profileKey)return response.status(400).json({error:'Choose a valid employee.'});
+      const updated=await db(`amplify_participants?profile_key=eq.${encodeURIComponent(profileKey)}`,authorization,{method:'PATCH',prefer:'return=representation',body:JSON.stringify({active:false,updated_at:new Date().toISOString()})});
+      if(!updated?.length)return response.status(404).json({error:'Employee was not found.'});
+      return response.status(200).json({message:`${updated[0].full_name} was removed from the active employee list.`,participant:updated[0]});
+    }
     if(mode==='workbook'){
       const run=await db('amplify_sync_runs',authorization,{method:'POST',prefer:'return=representation',body:JSON.stringify({source:'tracker_xlsx_import',requested_by:user.id})});runId=run?.[0]?.id;
       const counts=await importTracker(await parseWorkbook(request.body.fileBase64),authorization,user);const message=`Imported ${counts.people} participants, ${counts.posts} posts, ${counts.interactions} interactions and ${counts.bonuses} bonuses from ${request.body.fileName||'workbook'}.`;
@@ -234,7 +244,7 @@ export default async function handler(request,response){
     }
     if(!['sync-source','import-source','import-source-workbook'].includes(mode))return response.status(400).json({error:'Choose one Amplify source to sync or import.'});
     const source=String(request.body.source||'').toLowerCase();if(!AMPLIFY_SOURCES.includes(source))return response.status(400).json({error:'Choose posts, reposts, likes, or comments.'});
-    const participants=await db('amplify_participants?select=profile_key,profile_url,full_name,aliases',authorization);
+    const participants=await db('amplify_participants?select=profile_key,profile_url,full_name,aliases&active=is.true',authorization);
     const config=(await db('amplify_config?select=*&id=eq.true',authorization))[0]; const directory=participantDirectory(participants);
     const runSource=mode==='sync-source'?`apify_${source}_task`:`${source}_${mode==='import-source'?'json':'xlsx'}_import`;
     const run=await db('amplify_sync_runs',authorization,{method:'POST',prefer:'return=representation',body:JSON.stringify({source:runSource,requested_by:user.id})}); runId=run?.[0]?.id;
