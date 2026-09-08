@@ -2047,7 +2047,7 @@ let RECOVERED_PARTICIPANT=null;
 const RECOVERED_LABELS={recovered_post:'Original Apertera post',recovered_repost:'Repost / share',recovered_like:'Like company post',recovered_comment:'Comment on company post',other:'Other adjustment',marketing_pick:"Marketing's Pick"};
 function recoveredDefaultPoints(type){
   const config=AMPLIFY_DATA.config||{};
-  return {recovered_post:config.post_points||15,recovered_repost:config.repost_points||5,recovered_like:config.like_points||3,recovered_comment:config.comment_points||5,other:1}[type]||1;
+  return {recovered_post:config.post_points||15,recovered_repost:config.repost_points||5,recovered_like:config.like_points||3,recovered_comment:config.comment_points||5,marketing_pick:config.marketing_pick_points||20,other:1}[type]||1;
 }
 function closeRecoveredPoints(){document.getElementById('recoveredPointsOverlay').classList.remove('show');RECOVERED_PARTICIPANT=null;}
 async function loadRecoveredHistory(){
@@ -2056,19 +2056,19 @@ async function loadRecoveredHistory(){
   box.innerHTML='<div class="amplify-empty" style="padding:12px">Loading history…</div>';
   try{
     const rows=await amplifyGet(`amplify_bonuses?participant_key=eq.${encodeURIComponent(RECOVERED_PARTICIPANT.profile_key)}&select=id,adjustment_type,reason,points,note,evidence_url,awarded_at,reversed_at,reversal_reason&order=awarded_at.desc`);
-    box.innerHTML=rows.length?rows.map(row=>`<div class="recovered-history-item ${row.reversed_at?'reversed':''}"><div class="recovered-history-main"><strong>${escapeHTML(RECOVERED_LABELS[row.adjustment_type]||row.reason)}</strong><span>${amplifyDate(row.awarded_at)}${row.note?` · ${escapeHTML(row.note)}`:''}${row.reversed_at?` · Reversed${row.reversal_reason?`: ${escapeHTML(row.reversal_reason)}`:''}`:''}</span>${row.evidence_url?`<a href="${escapeHTML(row.evidence_url)}" target="_blank" rel="noopener noreferrer" style="font-size:10.5px;color:var(--accent)">View evidence</a>`:''}</div><div><div class="recovered-history-points">+${fmtInt(row.points)}</div>${!row.reversed_at&&row.adjustment_type!=='marketing_pick'?`<button class="recovered-reverse" data-reverse-adjustment="${row.id}">Reverse</button>`:''}</div></div>`).join(''):'<div class="amplify-empty" style="padding:12px">No manual adjustments yet.</div>';
+    box.innerHTML=rows.length?rows.map(row=>`<div class="recovered-history-item ${row.reversed_at?'reversed':''}"><div class="recovered-history-main"><strong>${escapeHTML(RECOVERED_LABELS[row.adjustment_type]||row.reason)}</strong><span>${amplifyDate(row.awarded_at)}${row.note?` · ${escapeHTML(row.note)}`:''}${row.reversed_at?` · Reversed${row.reversal_reason?`: ${escapeHTML(row.reversal_reason)}`:''}`:''}</span>${row.evidence_url?`<a href="${escapeHTML(row.evidence_url)}" target="_blank" rel="noopener noreferrer" style="font-size:10.5px;color:var(--accent)">View evidence</a>`:''}</div><div><div class="recovered-history-points">+${fmtInt(row.points)}</div>${!row.reversed_at?`<button class="recovered-reverse" data-reverse-adjustment="${row.id}">Reverse</button>`:''}</div></div>`).join(''):'<div class="amplify-empty" style="padding:12px">No manual adjustments yet.</div>';
     box.querySelectorAll('[data-reverse-adjustment]').forEach(button=>button.onclick=()=>reverseRecoveredPoints(button.dataset.reverseAdjustment));
   }catch(error){box.innerHTML=`<div class="amplify-empty" style="padding:12px">Could not load history: ${escapeHTML(error.message)}</div>`;}
 }
-async function openRecoveredPoints(row){
+async function openRecoveredPoints(row, initialType='recovered_post'){
   if(!isAmplifyAdmin()||!row)return;
   RECOVERED_PARTICIPANT=row;
   document.getElementById('recoveredPersonName').textContent=row.full_name;
-  document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(row.recovered_points||0)} recovered points`;
-  document.getElementById('recoveredType').value='recovered_post';
-  document.getElementById('recoveredPoints').value=recoveredDefaultPoints('recovered_post');
+  document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(row.recovered_points||0)} recovered · ${fmtInt(row.marketing_pick_points||0)} marketing`;
+  document.getElementById('recoveredType').value=initialType;
+  document.getElementById('recoveredPoints').value=recoveredDefaultPoints(initialType);
   document.getElementById('recoveredEvidence').value='';
-  document.getElementById('recoveredNote').value='';
+  document.getElementById('recoveredNote').value=initialType==='marketing_pick'?'Marketing bonus for this week':'';
   document.getElementById('recoveredPointsStatus').textContent='';
   document.getElementById('recoveredPointsStatus').className='modal-status';
   document.getElementById('recoveredPointsOverlay').classList.add('show');
@@ -2088,9 +2088,9 @@ async function saveRecoveredPoints(){
   try{
     const res=await fetch(`${SUPABASE_URL}/rest/v1/amplify_bonuses`,{method:'POST',headers:amplifyHeaders({'Content-Type':'application/json',Prefer:'return=minimal'}),body:JSON.stringify({participant_key:RECOVERED_PARTICIPANT.profile_key,profile_url:RECOVERED_PARTICIPANT.profile_url,full_name:RECOVERED_PARTICIPANT.full_name,adjustment_type:adjustmentType,reason:RECOVERED_LABELS[adjustmentType],points,evidence_url:evidenceUrl||null,note})});
     if(!res.ok)throw new Error((await res.text())||`Could not assign points (${res.status})`);
-    status.textContent=`+${points} recovered points assigned.`;status.className='modal-status ok';
+    status.textContent=`+${points} ${RECOVERED_LABELS[adjustmentType]||'points'} assigned.`;status.className='modal-status ok';
     AMPLIFY_DATA.loaded=false;await loadAmplifyData(true);await loadRecoveredHistory();
-    const updated=AMPLIFY_DATA.leaderboard.find(row=>row.profile_key===RECOVERED_PARTICIPANT.profile_key);if(updated)document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(updated.recovered_points||0)} recovered points`;
+    const updated=AMPLIFY_DATA.leaderboard.find(row=>row.profile_key===RECOVERED_PARTICIPANT.profile_key);if(updated)document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(updated.recovered_points||0)} recovered · ${fmtInt(updated.marketing_pick_points||0)} marketing`;
     setTimeout(()=>{closeRecoveredPoints();if(currentView==='amplify')renderAmplifyView();},650);
   }catch(error){status.textContent=error.message.includes('duplicate')?'This activity appears to have already been recovered.':error.message;status.className='modal-status bad';}finally{button.disabled=false;}
 }
@@ -2102,7 +2102,7 @@ async function reverseRecoveredPoints(id){
     const res=await fetch(`${SUPABASE_URL}/rest/v1/amplify_bonuses?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:amplifyHeaders({'Content-Type':'application/json',Prefer:'return=minimal'}),body:JSON.stringify({reversed_at:new Date().toISOString(),reversal_reason:reason.trim()})});
     if(!res.ok)throw new Error((await res.text())||`Could not reverse points (${res.status})`);
     AMPLIFY_DATA.loaded=false;await loadAmplifyData(true);await loadRecoveredHistory();
-    const updated=AMPLIFY_DATA.leaderboard.find(row=>row.profile_key===RECOVERED_PARTICIPANT.profile_key);if(updated)document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(updated.recovered_points||0)} recovered points`;
+    const updated=AMPLIFY_DATA.leaderboard.find(row=>row.profile_key===RECOVERED_PARTICIPANT.profile_key);if(updated)document.getElementById('recoveredPersonCurrent').textContent=`${fmtInt(updated.recovered_points||0)} recovered · ${fmtInt(updated.marketing_pick_points||0)} marketing`;
   }catch(error){document.getElementById('recoveredPointsStatus').textContent=error.message;document.getElementById('recoveredPointsStatus').className='modal-status bad';}
 }
 async function amplifyConnectionRequest(payload){
@@ -2219,7 +2219,7 @@ async function renderAmplifyView(){
     <div class="amplify-status" id="amplifyStatus">${lastRun ? `Last sync ${amplifyDate(lastRun.finished_at||lastRun.started_at)} · ${escapeHTML(lastRun.message||lastRun.status)}` : 'Historical workbook imported · API sync is ready to configure'}</div>
     <div class="kpi-row amplify-kpi-row"><div class="kpi"><div class="kpi-label">Participants</div><div class="kpi-value">${fmtInt(activeParticipants.length || visibleLeaderboard.length)}</div><div class="kpi-sub">employee whitelist</div></div><div class="kpi"><div class="kpi-label">Active scorers</div><div class="kpi-value">${fmtInt(active.length)}</div><div class="kpi-sub">with at least one point</div></div><div class="kpi"><div class="kpi-label">Points awarded</div><div class="kpi-value">${fmtInt(totalPoints)}</div><div class="kpi-sub">posts + interactions + bonuses</div></div><div class="kpi"><div class="kpi-label">Draw entries</div><div class="kpi-value">${fmtInt(entries)}</div><div class="kpi-sub">1 per ${config?.points_per_entry||10} points</div></div></div>
     ${renderAmplifyDepartmentView(participants)}
-    <div class="amplify-grid"><section class="amplify-panel"><div class="amplify-panel-head"><h3>Leaderboard</h3><span>${active.length} scoring participants</span></div><div class="amplify-table-wrap"><table class="amplify-table"><thead><tr><th>#</th><th>Participant</th><th>Posts</th><th>Interactions</th><th>Recovered</th><th>Marketing's Pick</th><th>Total</th><th>Entries</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>${visibleLeaderboard.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${fmtInt(row.post_points)}</td><td>${fmtInt(row.interaction_points)}</td><td>${fmtInt(row.recovered_points)}</td><td>${fmtInt(row.marketing_pick_points)}</td><td class="amplify-total">${fmtInt(row.total_points)}</td><td><span class="amplify-entry">${fmtInt(row.entries)}</span></td>${isAmplifyAdmin()?`<td><button class="amplify-assign-btn" data-amplify-adjust="${index}">+ Assign</button></td>`:''}</tr>`).join('')}</tbody></table></div></section>
+    <div class="amplify-grid"><section class="amplify-panel"><div class="amplify-panel-head"><h3>Leaderboard</h3><span>${active.length} scoring participants</span></div><div class="amplify-table-wrap"><table class="amplify-table"><thead><tr><th>#</th><th>Participant</th><th>Posts</th><th>Interactions</th><th>Recovered</th><th>Marketing's Pick</th><th>Total</th><th>Entries</th>${isAmplifyAdmin()?'<th></th>':''}</tr></thead><tbody>${visibleLeaderboard.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td><a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td><td>${fmtInt(row.post_points)}</td><td>${fmtInt(row.interaction_points)}</td><td>${fmtInt(row.recovered_points)}</td><td>${fmtInt(row.marketing_pick_points)}</td><td class="amplify-total">${fmtInt(row.total_points)}</td><td><span class="amplify-entry">${fmtInt(row.entries)}</span></td>${isAmplifyAdmin()?`<td><div class="amplify-row-actions"><button class="amplify-assign-btn amplify-marketing-btn" data-amplify-marketing="${index}">+ Marketing</button><button class="amplify-assign-btn" data-amplify-adjust="${index}">+ Assign</button></div></td>`:''}</tr>`).join('')}</tbody></table></div></section>
       <div><section class="amplify-panel"><div class="amplify-panel-head"><h3>Scoring rules</h3><span>Current</span></div><div class="amplify-rule-list"><div class="amplify-rule">Original Apertera post <b>+${config?.post_points||15}</b></div><div class="amplify-rule">Repost / share <b>+${config?.repost_points||5}</b></div><div class="amplify-rule">Like company post <b>+${config?.like_points||3}</b></div><div class="amplify-rule">Comment on company post <b>+${config?.comment_points||5}</b></div><div class="amplify-rule">Marketing's Pick <b>+${config?.marketing_pick_points||20}</b></div></div></section>
       <section class="amplify-panel" style="margin-top:18px"><div class="amplify-panel-head"><h3>Recent scoring posts</h3><span>${posts.length} shown</span></div><div class="amplify-feed">${posts.length?posts.map(post=>`<div class="amplify-post"><div class="amplify-post-top"><strong>${escapeHTML(post.full_name)}</strong><span>${post.is_repost?'Repost':'Post'} · ${amplifyDate(post.posted_at)||escapeHTML(post.post_date_label)}</span><a class="amplify-post-score" href="${escapeHTML(post.post_url)}" target="_blank" rel="noopener noreferrer">+${post.score}</a></div><div class="amplify-post-copy">${escapeHTML(post.content)}</div></div>`).join(''):'<div class="amplify-empty">No scoring posts yet.</div>'}</div></section></div>
     </div></div>`;
@@ -2233,6 +2233,7 @@ async function renderAmplifyView(){
   if(document.getElementById('amplifyParticipantBtn'))document.getElementById('amplifyParticipantBtn').onclick=openAmplifyParticipant;
   document.querySelectorAll('[data-amplify-department]').forEach(button=>button.onclick=()=>editAmplifyDepartment(button.dataset.amplifyDepartment));
   document.querySelectorAll('[data-amplify-remove]').forEach(button=>button.onclick=()=>removeAmplifyParticipant(button.dataset.amplifyRemove));
+  document.querySelectorAll('[data-amplify-marketing]').forEach(button=>button.onclick=()=>openRecoveredPoints(visibleLeaderboard[Number(button.dataset.amplifyMarketing)],'marketing_pick'));
   document.querySelectorAll('[data-amplify-adjust]').forEach(button=>button.onclick=()=>openRecoveredPoints(visibleLeaderboard[Number(button.dataset.amplifyAdjust)]));
   document.querySelectorAll('[data-amplify-import]').forEach(button=>button.onclick=()=>{amplifyImportType=button.dataset.amplifyImport;document.getElementById('amplifyFile').click();});
   document.getElementById('amplifyFile').onchange=async event=>{
