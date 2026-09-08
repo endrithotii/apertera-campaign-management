@@ -10,111 +10,73 @@
   :root{
     --ink:#050e1e;
     --flux:#0d7e89;
-    --cloud:#f7f8fc;
     --paper:#f2efe1;
     --line:#d8d4c4;
     --muted:#657086;
     --orange:#e7651a;
-    --green:#0d7e89;
   }
   *{box-sizing:border-box}
   body{
     margin:0;
     font-family:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
-    background:var(--paper);
+    background:#f7f8fc;
     color:var(--ink);
     min-height:100vh;
-    padding:48px 28px;
+    padding:44px 30px;
     -webkit-font-smoothing:antialiased;
   }
-  .container{max-width:980px;margin:0 auto}
-  .header{text-align:center;margin-bottom:34px}
+  .container{max-width:1630px;margin:0 auto}
+  .header{text-align:center;margin-bottom:78px}
   .eyebrow{
     color:var(--flux);
-    font-size:11px;
+    font-size:30px;
     font-weight:700;
-    letter-spacing:3px;
+    letter-spacing:9px;
     text-transform:uppercase;
-    margin-bottom:10px;
+    margin-bottom:28px;
   }
   h1{
     font-family:'Vollkorn',Georgia,serif;
-    font-size:clamp(42px,7vw,68px);
+    font-size:clamp(58px,6vw,92px);
     line-height:.98;
     margin:0;
-    letter-spacing:-.01em;
   }
-  .subtitle{margin:12px auto 0;color:var(--muted);font-size:13px;line-height:1.6;max-width:660px}
-  .summary{
-    display:grid;
-    grid-template-columns:repeat(4,minmax(0,1fr));
-    gap:12px;
-    margin:30px 0 34px;
-  }
-  .stat{
-    border-top:2px solid var(--flux);
-    padding-top:12px;
-  }
-  .stat b{display:block;font-family:'Vollkorn',Georgia,serif;font-size:30px;line-height:1}
-  .stat span{display:block;margin-top:4px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:700}
-  .table-card{background:rgba(255,255,255,.32);border:1px solid rgba(216,212,196,.78)}
+  .table-card{background:transparent}
   table{width:100%;border-collapse:collapse}
   thead th{
-    padding:14px 16px 12px;
+    padding:0 30px 26px;
     text-align:left;
     border-bottom:2px solid var(--flux);
-    font-size:11px;
+    font-size:30px;
     font-weight:700;
-    letter-spacing:1.5px;
-    text-transform:uppercase;
   }
-  th.rank{width:72px;color:var(--flux)}
-  th.points,th.entries{text-align:right}
+  th.rank{width:340px;color:var(--flux)}
+  th.employee{color:var(--orange)}
+  th.points{text-align:right;color:var(--flux)}
   tbody tr{border-bottom:1px solid var(--line)}
   tbody tr:last-child{border-bottom:2px solid var(--flux)}
-  tbody tr:nth-child(-n+3){background:rgba(13,126,137,.045)}
-  td{padding:15px 16px;vertical-align:middle}
+  td{padding:33px 30px;vertical-align:middle}
   td.rank{
     font-family:'Vollkorn',Georgia,serif;
-    font-size:18px;
+    font-size:32px;
     font-weight:700;
     color:var(--muted);
   }
   td.name a{
     font-family:'Vollkorn',Georgia,serif;
-    font-size:18px;
+    font-size:34px;
     font-weight:700;
-    color:var(--orange);
+    color:var(--ink);
     text-decoration:none;
   }
   td.name a:hover{text-decoration:underline}
-  .department{display:block;margin-top:3px;color:var(--muted);font-size:12px}
-  .mini{display:block;margin-top:6px;color:var(--muted);font-size:11px}
   td.points{
     text-align:right;
     font-family:'Vollkorn',Georgia,serif;
-    font-size:22px;
+    font-size:34px;
     font-weight:700;
+    color:var(--orange);
   }
-  td.entries{text-align:right;color:var(--flux);font-weight:800}
-  .rules{
-    margin:24px 0 0;
-    display:flex;
-    flex-wrap:wrap;
-    gap:8px;
-    justify-content:center;
-  }
-  .rule{
-    border:1px solid rgba(13,126,137,.22);
-    background:rgba(255,255,255,.38);
-    border-radius:999px;
-    padding:7px 10px;
-    color:var(--muted);
-    font-size:11px;
-    font-weight:700;
-  }
-  .rule b{color:var(--ink)}
-  .footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6}
   .loading,.error{
     padding:44px 18px;
     text-align:center;
@@ -125,31 +87,26 @@
   .error{color:#a63a3a}
   @media (max-width:720px){
     body{padding:30px 14px}
-    .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .header{margin-bottom:44px}
+    .eyebrow{font-size:18px;letter-spacing:6px}
     .table-card{overflow-x:auto}
-    table{min-width:680px}
-    td,thead th{padding-left:12px;padding-right:12px}
+    table{min-width:560px}
+    thead th{font-size:18px;padding:0 18px 18px}
+    th.rank{width:110px}
+    td{padding:24px 18px}
+    td.rank,td.name a,td.points{font-size:24px}
   }
 </style>
 </head>
 <body>
 <main class="container">
   <header class="header">
-    <div class="eyebrow">Apertera Amplify Challenge</div>
+    <div class="eyebrow">Leaderboard</div>
     <h1>Current Standings</h1>
-    <p class="subtitle" id="subtitle">Loading the latest leaderboard...</p>
   </header>
-  <section class="summary" aria-label="Leaderboard summary">
-    <div class="stat"><b id="participants">-</b><span>Participants</span></div>
-    <div class="stat"><b id="activeScorers">-</b><span>Active scorers</span></div>
-    <div class="stat"><b id="pointsAwarded">-</b><span>Points awarded</span></div>
-    <div class="stat"><b id="drawEntries">-</b><span>Draw entries</span></div>
-  </section>
   <section class="table-card" id="leaderboardWrap">
     <div class="loading">Loading leaderboard...</div>
   </section>
-  <section class="rules" id="rules" aria-label="Scoring rules"></section>
-  <footer class="footer">Use #Apertera in your posts to earn points.</footer>
 </main>
 <script>
 const fmt = value => Number(value || 0).toLocaleString('en-US');
@@ -159,23 +116,14 @@ const escapeHTML = value => String(value || '')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;');
-function formatDate(value){
-  const date = new Date(value);
-  if(Number.isNaN(date.getTime())) return 'today';
-  return date.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
-}
 function renderTable(rows){
   if(!rows.length) return '<div class="loading">No leaderboard rows yet.</div>';
   return `<table>
-    <thead><tr><th class="rank">Rank</th><th>Employee</th><th class="points">Points</th><th class="entries">Entries</th></tr></thead>
+    <thead><tr><th class="rank">Rank</th><th class="employee">Employee</th><th class="points">Points</th></tr></thead>
     <tbody>${rows.map(row=>`<tr>
       <td class="rank">${fmt(row.rank)}</td>
-      <td class="name"><a href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a>
-        <span class="department">${escapeHTML(row.department || 'Apertera')}</span>
-        <span class="mini">${fmt(row.post_points)} post pts · ${fmt(row.interaction_points)} interaction pts${Number(row.marketing_pick_points||0) ? ` · ${fmt(row.marketing_pick_points)} marketing bonus` : ''}</span>
-      </td>
+      <td class="name"><a href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a></td>
       <td class="points">${fmt(row.total_points)}</td>
-      <td class="entries">${fmt(row.entries)}</td>
     </tr>`).join('')}</tbody>
   </table>`;
 }
@@ -185,25 +133,9 @@ async function loadLeaderboard(){
     const data = await response.json();
     if(!response.ok) throw new Error(data.error || 'Could not load leaderboard.');
     const rows = data.leaderboard || [];
-    const active = rows.filter(row=>Number(row.total_points) > 0);
-    document.getElementById('subtitle').textContent = `July - September 2026 · Updated ${formatDate(data.updatedAt)}`;
-    document.getElementById('participants').textContent = fmt(rows.length);
-    document.getElementById('activeScorers').textContent = fmt(active.length);
-    document.getElementById('pointsAwarded').textContent = fmt(active.reduce((sum,row)=>sum + Number(row.total_points || 0),0));
-    document.getElementById('drawEntries').textContent = fmt(active.reduce((sum,row)=>sum + Number(row.entries || 0),0));
     document.getElementById('leaderboardWrap').innerHTML = renderTable(rows);
-    const rules = data.rules || {};
-    document.getElementById('rules').innerHTML = [
-      ['Original post', rules.post],
-      ['Repost / share', rules.repost],
-      ['Like', rules.like],
-      ['Comment', rules.comment],
-      ["Marketing's Pick", rules.marketingPick],
-      ['Entry', `${rules.pointsPerEntry} pts`]
-    ].map(([label,value])=>`<span class="rule">${escapeHTML(label)} <b>+${escapeHTML(value)}</b></span>`).join('');
   }catch(error){
     document.getElementById('leaderboardWrap').innerHTML = `<div class="error">${escapeHTML(error.message)}</div>`;
-    document.getElementById('subtitle').textContent = 'The leaderboard could not be loaded.';
   }
 }
 loadLeaderboard();
