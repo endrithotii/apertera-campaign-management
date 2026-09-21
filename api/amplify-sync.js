@@ -17,6 +17,16 @@ function normalizeUrl(value='') {
 function cleanText(value='', max=300) {
   return String(value || '').trim().slice(0, max);
 }
+function sanitizeForDatabase(value) {
+  if (typeof value === 'string') return value.replace(/\u0000/g, '').replace(/\\u0000/gi, '');
+  if (Array.isArray(value)) return value.map(sanitizeForDatabase);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => String(key).toLowerCase() !== 'manifest')
+      .map(([key, item]) => [key, sanitizeForDatabase(item)]));
+  }
+  return value;
+}
 function cleanLinkedInProfileUrl(value='') {
   const raw = cleanText(value, 800);
   if(!raw) return '';
@@ -39,7 +49,9 @@ function restHeaders(authorization, prefer='') {
   return {apikey:SUPABASE_ANON_KEY,Authorization:authorization,'Content-Type':'application/json',...(prefer?{Prefer:prefer}:{})};
 }
 async function db(path, authorization, options={}) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {...options,headers:{...restHeaders(authorization,options.prefer),...(options.headers||{})}});
+  const safeOptions = {...options};
+  if (typeof safeOptions.body === 'string') safeOptions.body = safeOptions.body.replace(/\u0000/g, '').replace(/\\u0000/gi, '');
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {...safeOptions,headers:{...restHeaders(authorization,safeOptions.prefer),...(safeOptions.headers||{})}});
   if (!response.ok) throw new Error(`Database ${response.status}: ${(await response.text()).slice(0,500)}`);
   const text=await response.text(); return text?JSON.parse(text):null;
 }
@@ -68,10 +80,11 @@ function mapPosts(items,directory,config) {
   const posts=[],unmatched=[];
   for(const item of items||[]){
     if(!item||item.type!=='post')continue;
-    const author=item.author||{}; const url=item.linkedinUrl||item.shareLinkedinUrl;
+    const safeItem=sanitizeForDatabase(item);
+    const author=safeItem.author||{}; const url=safeItem.linkedinUrl||safeItem.shareLinkedinUrl;
     const person=directory.resolve(author.linkedinUrl,author.name); if(!url||!person){if(author.type==='profile')unmatched.push(author.name||author.linkedinUrl||'Unknown');continue;}
-    const repost=item.repost||null; const content=`${item.content||''} ${repost?.content||''}`.trim();
-    posts.push({post_key:normalizeUrl(url),participant_key:person.profile_key,post_url:url,full_name:person.full_name,like_count:Number(item.engagement?.likes||0),comment_count:Number(item.engagement?.comments||0),post_date_label:item.postedAt?.postedAgoShort||'',content,own_content:item.content||'',shared_post_url:repost?.linkedinUrl||'',action:repost?`${person.full_name} reposted this`:'Post',is_repost:!!repost,has_apertera:content.toLowerCase().includes('apertera')||normalizeUrl(repost?.linkedinUrl).includes('linkedin.com/company/apertera'),posted_at:item.postedAt?.date||null,score:scorePost(item,person,config),source:'apify_api',raw:item});
+    const repost=safeItem.repost||null; const content=`${safeItem.content||''} ${repost?.content||''}`.trim();
+    posts.push({post_key:normalizeUrl(url),participant_key:person.profile_key,post_url:url,full_name:person.full_name,like_count:Number(safeItem.engagement?.likes||0),comment_count:Number(safeItem.engagement?.comments||0),post_date_label:safeItem.postedAt?.postedAgoShort||'',content,own_content:safeItem.content||'',shared_post_url:repost?.linkedinUrl||'',action:repost?`${person.full_name} reposted this`:'Post',is_repost:!!repost,has_apertera:content.toLowerCase().includes('apertera')||normalizeUrl(repost?.linkedinUrl).includes('linkedin.com/company/apertera'),posted_at:safeItem.postedAt?.date||null,score:scorePost(safeItem,person,config),source:'apify_api',raw:safeItem});
   }
   const uniquePosts=[...new Map(posts.map(post=>[post.post_key,post])).values()];
   return {posts:uniquePosts,unmatched:[...new Set(unmatched)]};
@@ -92,7 +105,7 @@ function mapInteractions(rows,action,directory,points){
   for(const row of rows||[]){
     if(!row||row.error)continue; const url=row.profileLink||row.profileUrl; const post=row.postUrl; const person=directory.resolve(url,row.name||row.fullName);
     if(!url||!post||!person){if(url&&post)unmatched++;continue;}
-    interactions.push({interaction_key:`${person.profile_key}|${normalizeUrl(post)}|${action}`,participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,post_url:post,action,occurred_at:row.timestamp||null,score:points,source:'phantombuster_api',raw:row});
+    interactions.push({interaction_key:`${person.profile_key}|${normalizeUrl(post)}|${action}`,participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,post_url:post,action,occurred_at:row.timestamp||null,score:points,source:'phantombuster_api',raw:sanitizeForDatabase(row)});
   }
   const uniqueInteractions=[...new Map(interactions.map(item=>[item.interaction_key,item])).values()];
   return {interactions:uniqueInteractions,unmatched};
@@ -101,11 +114,12 @@ function mapApifyInteractions(rows,action,directory,points,existingRows=[]){
   const existing=new Map(existingRows.map(row=>[`${row.participant_key}|${activityId(row.post_url)||normalizeUrl(row.post_url)}|${row.action}`,row.interaction_key]));
   const interactions=[],unmatched=[];
   for(const row of rows||[]){
-    const actor=row.actor||{};if(actor.type&&actor.type!=='profile')continue;
-    const post=row.query?.post||row.postUrl||'';const person=directory.resolve(actor.linkedinUrl,actor.name);
+    const safeRow=sanitizeForDatabase(row);
+    const actor=safeRow.actor||{};if(actor.type&&actor.type!=='profile')continue;
+    const post=safeRow.query?.post||safeRow.postUrl||'';const person=directory.resolve(actor.linkedinUrl,actor.name);
     if(!post||!person){if(actor.name||actor.linkedinUrl)unmatched.push(actor.name||actor.linkedinUrl);continue;}
     const matchKey=`${person.profile_key}|${activityId(post)||normalizeUrl(post)}|${action}`;
-    interactions.push({interaction_key:existing.get(matchKey)||`${person.profile_key}|${normalizeUrl(post)}|${action}`,participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,post_url:post,action,occurred_at:row.createdAt||row.timestamp?.date||null,score:points,source:`apify_${action}s`,raw:row});
+    interactions.push({interaction_key:existing.get(matchKey)||`${person.profile_key}|${normalizeUrl(post)}|${action}`,participant_key:person.profile_key,profile_url:person.profile_url,full_name:person.full_name,post_url:post,action,occurred_at:safeRow.createdAt||safeRow.timestamp?.date||null,score:points,source:`apify_${action}s`,raw:safeRow});
   }
   return {interactions:[...new Map(interactions.map(item=>[item.interaction_key,item])).values()],unmatched:[...new Set(unmatched)]};
 }
@@ -113,10 +127,11 @@ function mapApifyReshares(rows,directory,config,existingRows=[]){
   const existing=new Map(existingRows.map(row=>[`${row.participant_key}|${activityId(row.post_url)}`,row.post_key]).filter(x=>x[0].split('|')[1]));
   const posts=[],unmatched=[];
   for(const row of rows||[]){
-    const actor=row.reposter||{};const person=directory.resolve(actor.profile_url,actor.name);const url=row.url||'';const original=row.reshared_post?.url||row._metadata?.post_url||'';
+    const safeRow=sanitizeForDatabase(row);
+    const actor=safeRow.reposter||{};const person=directory.resolve(actor.profile_url,actor.name);const url=safeRow.url||'';const original=safeRow.reshared_post?.url||safeRow._metadata?.post_url||'';
     if(!url||!person){if(actor.name||actor.profile_url)unmatched.push(actor.name||actor.profile_url);continue;}
-    const key=existing.get(`${person.profile_key}|${row.id||activityId(url)}`)||normalizeUrl(url);
-    posts.push({post_key:key,participant_key:person.profile_key,post_url:url,full_name:person.full_name,like_count:0,comment_count:0,post_date_label:row.timestamp?.relative||'',content:row.reshared_post?.text||'',own_content:'',shared_post_url:original,action:`${person.full_name} reposted this`,is_repost:true,has_apertera:true,posted_at:row.timestamp?.date||null,score:config.repost_points,source:'apify_reposts',raw:row});
+    const key=existing.get(`${person.profile_key}|${safeRow.id||activityId(url)}`)||normalizeUrl(url);
+    posts.push({post_key:key,participant_key:person.profile_key,post_url:url,full_name:person.full_name,like_count:0,comment_count:0,post_date_label:safeRow.timestamp?.relative||'',content:safeRow.reshared_post?.text||'',own_content:'',shared_post_url:original,action:`${person.full_name} reposted this`,is_repost:true,has_apertera:true,posted_at:safeRow.timestamp?.date||null,score:config.repost_points,source:'apify_reposts',raw:safeRow});
   }
   return {posts:[...new Map(posts.map(item=>[item.post_key,item])).values()],unmatched:[...new Set(unmatched)]};
 }
