@@ -2149,7 +2149,6 @@ function buildAmplifyAnalytics(data){
     person.total_actions += 1;
   });
   const peopleRows = [...people.values()];
-  const topPeople = [...peopleRows].sort((a,b)=>b.total_actions-a.total_actions || b.total_points-a.total_points).slice(0,10);
   const topReposters = [...peopleRows].filter(row=>row.reposts).sort((a,b)=>b.reposts-a.reposts || b.total_points-a.total_points).slice(0,8);
   const topCommenters = [...peopleRows].filter(row=>row.comments).sort((a,b)=>b.comments-a.comments || b.total_points-a.total_points).slice(0,8);
   const topLikers = [...peopleRows].filter(row=>row.likes).sort((a,b)=>b.likes-a.likes || b.total_points-a.total_points).slice(0,8);
@@ -2176,7 +2175,7 @@ function buildAmplifyAnalytics(data){
       scoredPosts:scoredPosts.length,
       activePeople:new Set([...scoredPosts,...interactions].map(row=>row.participant_key||row.profile_url||row.full_name).filter(Boolean)).size
     },
-    topTrackedPosts, ownEngagementPosts, topRepostedPosts, topPeople, topReposters, topCommenters, topLikers, topInteractionDays
+    topTrackedPosts, ownEngagementPosts, topRepostedPosts, topReposters, topCommenters, topLikers, topInteractionDays
   };
 }
 function analyticsEmpty(colspan,label='No data yet.'){
@@ -2214,7 +2213,6 @@ async function renderAmplifyAnalyticsView(){
       <section class="amplify-panel"><div class="amplify-panel-head"><h3>Who liked most</h3><span>scored likes</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Likes</th></tr></thead><tbody>${analytics.topLikers.length?analytics.topLikers.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(row.full_name)}</td><td class="amplify-total">${fmtInt(row.likes)}</td></tr>`).join(''):analyticsEmpty(3)}</tbody></table></div></section>
       <section class="amplify-panel"><div class="amplify-panel-head"><h3>Highest LinkedIn engagement</h3><span>on employee posts</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Post</th><th>LinkedIn likes</th><th>LinkedIn comments</th></tr></thead><tbody>${analytics.ownEngagementPosts.length?analytics.ownEngagementPosts.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${amplifyPostCell(row,row.post_url)}</td><td>${fmtInt(row.like_count)}</td><td class="amplify-total">${fmtInt(row.comment_count)}</td></tr>`).join(''):analyticsEmpty(4)}</tbody></table></div></section>
       <section class="amplify-panel"><div class="amplify-panel-head"><h3>Most active periods</h3><span>interaction dates</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Day</th><th>Likes</th><th>Comments</th><th>Total</th></tr></thead><tbody>${analytics.topInteractionDays.length?analytics.topInteractionDays.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(amplifyPrettyDay(row.day))}</td><td>${fmtInt(row.likes)}</td><td>${fmtInt(row.comments)}</td><td class="amplify-total">${fmtInt(row.total)}</td></tr>`).join(''):analyticsEmpty(5)}</tbody></table></div><div class="amplify-analytics-note">If a source does not provide an exact interaction timestamp, the import time is used for the period rollup.</div></section>
-      <section class="amplify-panel amplify-analytics-wide"><div class="amplify-panel-head"><h3>Top employee activity</h3><span>posts + reposts + likes + comments</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Posts</th><th>Reposts</th><th>Likes</th><th>Comments</th><th>Total actions</th></tr></thead><tbody>${analytics.topPeople.length?analytics.topPeople.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${row.profile_url?`<a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a>`:escapeHTML(row.full_name)}</td><td>${fmtInt(row.posts)}</td><td>${fmtInt(row.reposts)}</td><td>${fmtInt(row.likes)}</td><td>${fmtInt(row.comments)}</td><td class="amplify-total">${fmtInt(row.total_actions)}</td></tr>`).join(''):analyticsEmpty(7)}</tbody></table></div><div class="amplify-analytics-note">This table counts activity records, not leaderboard points. A like counts as one action, a comment counts as one action, a repost counts as one action, and an original post counts as one action.</div></section>
     </div>
   </div>`;
   document.getElementById('amplifyAnalyticsRefresh').onclick=async()=>{
