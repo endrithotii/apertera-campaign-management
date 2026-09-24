@@ -1796,6 +1796,7 @@ const VIEW_TITLES = {
   'executive-dashboard': 'Executive Dashboard',
   'ads-gallery': 'Ads Gallery',
   amplify: 'Amplify Challenge',
+  'amplify-analytics': 'Analytics',
   creatives: 'All Creatives',
   'landing-pages': 'Landing Pages',
   budget: 'Budget Pacing',
@@ -1810,6 +1811,7 @@ const VIEW_SORTS = {
   'executive-dashboard': [],
   'ads-gallery': ['spend','impressions','clicks','ctr','leads'],
   amplify: [],
+  'amplify-analytics': [],
   creatives: ['spend','impressions','clicks','ctr'],
   'landing-pages': ['spend','clicks','impressions','ctr'],
   budget: ['spend','dailyBudget','pacing'],
@@ -1840,7 +1842,7 @@ function setView(view){
   const filterable = ['campaigns','campaign-grid','status-kanban','campaign-calendar','executive-dashboard','ads-gallery','creatives'].includes(view);
   document.getElementById('filterSelect').style.display = filterable ? 'inline-flex' : 'none';
   document.getElementById('dateRangeSelect').style.display = filterable ? 'inline-flex' : 'none';
-  document.querySelector('.search-box').style.display = view === 'amplify' ? 'none' : 'flex';
+  document.querySelector('.search-box').style.display = ['amplify','amplify-analytics'].includes(view) ? 'none' : 'flex';
   document.getElementById('filterSelect').value = state.statusFilter;
   document.getElementById('dateRangeSelect').value = state.dateRange;
   populateSortSelect();
@@ -1913,6 +1915,7 @@ function renderMain(){
   else if(currentView === 'executive-dashboard') renderExecutiveDashboardView();
   else if(currentView === 'ads-gallery') renderAdsGalleryView();
   else if(currentView === 'amplify') renderAmplifyView();
+  else if(currentView === 'amplify-analytics') renderAmplifyAnalyticsView();
   else if(currentView === 'adset-detail') renderAdSetDetailView();
   else if(currentView === 'creatives') renderCreativesView();
   else if(currentView === 'landing-pages') renderLandingPagesView();
@@ -1934,7 +1937,7 @@ const AMPLIFY_DEPARTMENTS = [
   { name:'Product', total:7, color:'#a57bd9' }
 ];
 const AMPLIFY_DEPARTMENT_OPTIONS = AMPLIFY_DEPARTMENTS.map(dept=>dept.name);
-let AMPLIFY_DATA = { leaderboard:[], posts:[], participants:[], config:null, runs:[], loaded:false, error:'' };
+let AMPLIFY_DATA = { leaderboard:[], posts:[], analyticsPosts:[], analyticsInteractions:[], participants:[], config:null, runs:[], loaded:false, error:'' };
 function amplifyHeaders(extra={}){
   const session = getStoredSession();
   return { apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${session?.access_token || ''}`, ...extra };
@@ -1947,14 +1950,16 @@ async function amplifyGet(path){
 async function loadAmplifyData(force=false){
   if(AMPLIFY_DATA.loaded && !force) return;
   try{
-    const [leaderboard,posts,participants,config,runs] = await Promise.all([
+    const [leaderboard,posts,analyticsPosts,analyticsInteractions,participants,config,runs] = await Promise.all([
       amplifyGet('amplify_leaderboard?select=*&order=total_points.desc,full_name.asc'),
       amplifyGet('amplify_posts?select=post_url,full_name,content,score,is_repost,posted_at,post_date_label&score=gt.0&order=posted_at.desc.nullslast&limit=8'),
+      amplifyGet('amplify_posts?select=post_key,participant_key,post_url,full_name,like_count,comment_count,content,is_repost,has_apertera,posted_at,post_date_label,score,source,shared_post_url&order=posted_at.desc.nullslast&limit=5000'),
+      amplifyGet('amplify_interactions?select=interaction_key,participant_key,profile_url,full_name,post_url,action,occurred_at,score,source,imported_at&order=imported_at.desc&limit=5000'),
       amplifyGet('amplify_participants?select=profile_key,profile_url,full_name,department,active&order=full_name.asc'),
       amplifyGet('amplify_config?select=*&id=eq.true'),
       amplifyGet('amplify_sync_runs?select=*&order=started_at.desc&limit=5')
     ]);
-    AMPLIFY_DATA = {leaderboard,posts,participants,config:config[0]||null,runs,loaded:true,error:''};
+    AMPLIFY_DATA = {leaderboard,posts,analyticsPosts,analyticsInteractions,participants,config:config[0]||null,runs,loaded:true,error:''};
   }catch(error){ AMPLIFY_DATA = {...AMPLIFY_DATA,loaded:true,error:error.message}; }
 }
 function amplifyDate(value){
@@ -2033,6 +2038,189 @@ function renderAmplifyDepartmentView(participants){
       </tbody></table></div>
     </div>
   </section>`;
+}
+function amplifyActivityKey(value=''){
+  const text = String(value || '').trim();
+  if(!text) return '';
+  const match = text.match(/(?:activity[:/]|urn:li:(?:activity|ugcPost):)(\d{10,})/i);
+  if(match) return match[1];
+  return text.toLowerCase().replace(/^https?:\/\//,'').replace(/^www\./,'').split('?')[0].replace(/\/+$/,'');
+}
+function amplifyShortText(value='',max=88){
+  const text = String(value || '').replace(/\s+/g,' ').trim();
+  if(!text) return '';
+  return text.length > max ? `${text.slice(0,max-3).trim()}...` : text;
+}
+function amplifyPostTitle(row){
+  if(!row) return 'LinkedIn post';
+  return amplifyShortText(row.content, 96) || amplifyShortText(row.post_url, 96) || 'LinkedIn post';
+}
+function amplifyPostCell(row, fallbackUrl=''){
+  const url = row?.post_url || fallbackUrl || '';
+  const label = amplifyPostTitle(row || {post_url:fallbackUrl});
+  const meta = row?.full_name ? `<span>${escapeHTML(row.full_name)}${row.posted_at ? ` · ${amplifyDate(row.posted_at)}` : ''}</span>` : (url ? `<span>${escapeHTML(amplifyActivityKey(url))}</span>` : '');
+  return `<div class="amplify-analytics-post">${url ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(label)}</a>` : `<b>${escapeHTML(label)}</b>`}${meta}</div>`;
+}
+function amplifyDayKey(value){
+  if(!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0,10);
+}
+function amplifyPrettyDay(day){
+  if(!day) return 'Unknown';
+  const date = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? day : date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+function amplifyIncrement(map,key,seed){
+  if(!key) return null;
+  if(!map.has(key)) map.set(key, {...seed});
+  return map.get(key);
+}
+function buildAmplifyAnalytics(data){
+  const activeKeys = new Set((data.participants||[]).filter(row=>row.active !== false).map(row=>row.profile_key).filter(Boolean));
+  const inScope = row => !activeKeys.size || !row.participant_key || activeKeys.has(row.participant_key);
+  const posts = (data.analyticsPosts||[]).filter(inScope);
+  const interactions = (data.analyticsInteractions||[]).filter(inScope);
+  const scoredPosts = posts.filter(row=>Number(row.score||0) > 0);
+  const originalPosts = scoredPosts.filter(row=>!row.is_repost);
+  const reposts = scoredPosts.filter(row=>row.is_repost);
+  const likes = interactions.filter(row=>String(row.action||'').toLowerCase()==='like');
+  const comments = interactions.filter(row=>String(row.action||'').toLowerCase()==='comment');
+  const leaderboardByKey = new Map((data.leaderboard||[]).map(row=>[row.profile_key,row]));
+  const postByKey = new Map();
+  posts.forEach(post=>{
+    [post.post_url, post.shared_post_url].forEach(url=>{
+      const key = amplifyActivityKey(url);
+      if(key && !postByKey.has(key)) postByKey.set(key, post);
+    });
+  });
+
+  const trackedPosts = new Map();
+  interactions.forEach(row=>{
+    const key = amplifyActivityKey(row.post_url);
+    const item = amplifyIncrement(trackedPosts,key,{post_url:row.post_url,post:postByKey.get(key)||null,likes:0,comments:0,total:0});
+    if(!item) return;
+    const action = String(row.action||'').toLowerCase();
+    if(action === 'like') item.likes += 1;
+    if(action === 'comment') item.comments += 1;
+    item.total += 1;
+  });
+  const topTrackedPosts = [...trackedPosts.values()]
+    .sort((a,b)=>b.total-a.total || b.likes-a.likes || b.comments-a.comments)
+    .slice(0,8);
+
+  const ownEngagementPosts = posts
+    .filter(row=>Number(row.like_count||0) || Number(row.comment_count||0))
+    .sort((a,b)=>(Number(b.like_count||0)+Number(b.comment_count||0))-(Number(a.like_count||0)+Number(a.comment_count||0)))
+    .slice(0,8);
+
+  const repostedSources = new Map();
+  reposts.forEach(row=>{
+    const sourceUrl = row.shared_post_url || row.post_url;
+    const key = amplifyActivityKey(sourceUrl);
+    const item = amplifyIncrement(repostedSources,key,{post_url:sourceUrl,post:postByKey.get(key)||row,reposts:0,latest:''});
+    if(!item) return;
+    item.reposts += 1;
+    if(row.posted_at && (!item.latest || new Date(row.posted_at) > new Date(item.latest))) item.latest = row.posted_at;
+  });
+  const topRepostedPosts = [...repostedSources.values()]
+    .sort((a,b)=>b.reposts-a.reposts)
+    .slice(0,8);
+
+  const people = new Map();
+  const personFor = row => amplifyIncrement(people,row.participant_key||row.profile_url||row.full_name,{
+    full_name:row.full_name || 'Unknown',
+    profile_url:leaderboardByKey.get(row.participant_key)?.profile_url || row.profile_url || '',
+    posts:0,reposts:0,likes:0,comments:0,total_actions:0,total_points:Number(leaderboardByKey.get(row.participant_key)?.total_points||0)
+  });
+  scoredPosts.forEach(row=>{
+    const person = personFor(row);
+    if(!person) return;
+    if(row.is_repost) person.reposts += 1;
+    else person.posts += 1;
+    person.total_actions += 1;
+  });
+  interactions.forEach(row=>{
+    const person = personFor(row);
+    if(!person) return;
+    const action = String(row.action||'').toLowerCase();
+    if(action === 'like') person.likes += 1;
+    if(action === 'comment') person.comments += 1;
+    person.total_actions += 1;
+  });
+  const peopleRows = [...people.values()];
+  const topPeople = [...peopleRows].sort((a,b)=>b.total_actions-a.total_actions || b.total_points-a.total_points).slice(0,10);
+  const topReposters = [...peopleRows].filter(row=>row.reposts).sort((a,b)=>b.reposts-a.reposts || b.total_points-a.total_points).slice(0,8);
+  const topCommenters = [...peopleRows].filter(row=>row.comments).sort((a,b)=>b.comments-a.comments || b.total_points-a.total_points).slice(0,8);
+  const topLikers = [...peopleRows].filter(row=>row.likes).sort((a,b)=>b.likes-a.likes || b.total_points-a.total_points).slice(0,8);
+
+  const interactionDays = new Map();
+  interactions.forEach(row=>{
+    const day = amplifyDayKey(row.occurred_at || row.imported_at);
+    const item = amplifyIncrement(interactionDays,day,{day,likes:0,comments:0,total:0});
+    if(!item) return;
+    const action = String(row.action||'').toLowerCase();
+    if(action === 'like') item.likes += 1;
+    if(action === 'comment') item.comments += 1;
+    item.total += 1;
+  });
+  const topInteractionDays = [...interactionDays.values()].sort((a,b)=>b.total-a.total).slice(0,8);
+
+  return {
+    totals:{
+      interactions:interactions.length,
+      likes:likes.length,
+      comments:comments.length,
+      originalPosts:originalPosts.length,
+      reposts:reposts.length,
+      scoredPosts:scoredPosts.length,
+      activePeople:new Set([...scoredPosts,...interactions].map(row=>row.participant_key||row.profile_url||row.full_name).filter(Boolean)).size
+    },
+    topTrackedPosts, ownEngagementPosts, topRepostedPosts, topPeople, topReposters, topCommenters, topLikers, topInteractionDays
+  };
+}
+function analyticsEmpty(colspan,label='No data yet.'){
+  return `<tr><td colspan="${colspan}" class="amplify-analytics-empty">${escapeHTML(label)}</td></tr>`;
+}
+async function renderAmplifyAnalyticsView(){
+  const content = document.getElementById('content');
+  if(!AMPLIFY_DATA.loaded){
+    content.innerHTML='<div class="amplify-empty">Loading Amplify Analytics...</div>';
+    await loadAmplifyData();
+    if(currentView !== 'amplify-analytics') return;
+  }
+  const {participants,error,runs}=AMPLIFY_DATA;
+  const analytics = buildAmplifyAnalytics(AMPLIFY_DATA);
+  const lastRun = runs.find(run=>run.status==='success'||run.status==='partial') || null;
+  document.getElementById('amplify-nav-count').textContent = participants.filter(row=>row.active !== false).length || '0';
+  const analyticsCount = document.getElementById('analytics-nav-count');
+  if(analyticsCount) analyticsCount.textContent = fmtInt(analytics.totals.interactions);
+  if(error){ content.innerHTML=`<div class="amplify-empty">Could not load Amplify Analytics: ${escapeHTML(error)}</div>`; return; }
+  content.innerHTML=`<div class="amplify-shell">
+    <section class="amplify-hero amplify-analytics-hero"><div><div class="amplify-kicker">Amplify analytics</div><h2>Challenge Activity Analytics</h2><p>Live rollups from scored posts, reposts, likes and comments. Counts are scoped to the current active employee list and refresh after each API sync.</p></div><div class="amplify-actions"><button class="amplify-btn secondary" id="amplifyAnalyticsRefresh">Refresh</button></div></section>
+    <div class="amplify-status">${lastRun ? `Last sync ${amplifyDate(lastRun.finished_at||lastRun.started_at)} · ${escapeHTML(lastRun.message||lastRun.status)}` : 'No API sync run recorded yet.'}</div>
+    <div class="kpi-row amplify-kpi-row amplify-analytics-kpis">
+      <div class="kpi"><div class="kpi-label">Total interactions</div><div class="kpi-value">${fmtInt(analytics.totals.interactions)}</div><div class="kpi-sub">likes + comments</div></div>
+      <div class="kpi"><div class="kpi-label">Likes</div><div class="kpi-value">${fmtInt(analytics.totals.likes)}</div><div class="kpi-sub">scored reactions</div></div>
+      <div class="kpi"><div class="kpi-label">Comments</div><div class="kpi-value">${fmtInt(analytics.totals.comments)}</div><div class="kpi-sub">scored comments</div></div>
+      <div class="kpi"><div class="kpi-label">Original posts</div><div class="kpi-value">${fmtInt(analytics.totals.originalPosts)}</div><div class="kpi-sub">scored employee posts</div></div>
+      <div class="kpi"><div class="kpi-label">Reposts</div><div class="kpi-value">${fmtInt(analytics.totals.reposts)}</div><div class="kpi-sub">scored shares</div></div>
+    </div>
+    <div class="amplify-analytics-grid">
+      <section class="amplify-panel amplify-analytics-wide"><div class="amplify-panel-head"><h3>Most engaged tracked posts</h3><span>employee likes/comments on monitored posts</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Post</th><th>Likes</th><th>Comments</th><th>Total</th></tr></thead><tbody>${analytics.topTrackedPosts.length?analytics.topTrackedPosts.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${amplifyPostCell(row.post,row.post_url)}</td><td>${fmtInt(row.likes)}</td><td>${fmtInt(row.comments)}</td><td class="amplify-total">${fmtInt(row.total)}</td></tr>`).join(''):analyticsEmpty(5)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Most reposted posts</h3><span>source posts shared most</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Post</th><th>Reposts</th></tr></thead><tbody>${analytics.topRepostedPosts.length?analytics.topRepostedPosts.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${amplifyPostCell(row.post,row.post_url)}</td><td class="amplify-total">${fmtInt(row.reposts)}</td></tr>`).join(''):analyticsEmpty(3)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Top employee activity</h3><span>all scored actions</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Posts</th><th>Reposts</th><th>Likes</th><th>Comments</th><th>Total</th></tr></thead><tbody>${analytics.topPeople.length?analytics.topPeople.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${row.profile_url?`<a class="amplify-name" href="${escapeHTML(row.profile_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(row.full_name)}</a>`:escapeHTML(row.full_name)}</td><td>${fmtInt(row.posts)}</td><td>${fmtInt(row.reposts)}</td><td>${fmtInt(row.likes)}</td><td>${fmtInt(row.comments)}</td><td class="amplify-total">${fmtInt(row.total_actions)}</td></tr>`).join(''):analyticsEmpty(7)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Who reposted most</h3><span>scored repost count</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Reposts</th></tr></thead><tbody>${analytics.topReposters.length?analytics.topReposters.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(row.full_name)}</td><td class="amplify-total">${fmtInt(row.reposts)}</td></tr>`).join(''):analyticsEmpty(3)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Who commented most</h3><span>scored comments</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Comments</th></tr></thead><tbody>${analytics.topCommenters.length?analytics.topCommenters.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(row.full_name)}</td><td class="amplify-total">${fmtInt(row.comments)}</td></tr>`).join(''):analyticsEmpty(3)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Who liked most</h3><span>scored likes</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Employee</th><th>Likes</th></tr></thead><tbody>${analytics.topLikers.length?analytics.topLikers.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(row.full_name)}</td><td class="amplify-total">${fmtInt(row.likes)}</td></tr>`).join(''):analyticsEmpty(3)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Highest LinkedIn engagement</h3><span>on employee posts</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Post</th><th>LinkedIn likes</th><th>LinkedIn comments</th></tr></thead><tbody>${analytics.ownEngagementPosts.length?analytics.ownEngagementPosts.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${amplifyPostCell(row,row.post_url)}</td><td>${fmtInt(row.like_count)}</td><td class="amplify-total">${fmtInt(row.comment_count)}</td></tr>`).join(''):analyticsEmpty(4)}</tbody></table></div></section>
+      <section class="amplify-panel"><div class="amplify-panel-head"><h3>Most active periods</h3><span>interaction dates</span></div><div class="amplify-table-wrap"><table class="amplify-table amplify-analytics-table"><thead><tr><th>#</th><th>Day</th><th>Likes</th><th>Comments</th><th>Total</th></tr></thead><tbody>${analytics.topInteractionDays.length?analytics.topInteractionDays.map((row,index)=>`<tr><td class="amplify-rank">${index+1}</td><td>${escapeHTML(amplifyPrettyDay(row.day))}</td><td>${fmtInt(row.likes)}</td><td>${fmtInt(row.comments)}</td><td class="amplify-total">${fmtInt(row.total)}</td></tr>`).join(''):analyticsEmpty(5)}</tbody></table></div><div class="amplify-analytics-note">If a source does not provide an exact interaction timestamp, the import time is used for the period rollup.</div></section>
+    </div>
+  </div>`;
+  document.getElementById('amplifyAnalyticsRefresh').onclick=async()=>{
+    AMPLIFY_DATA.loaded=false;
+    await renderAmplifyAnalyticsView();
+  };
 }
 function isAmplifyAdmin(){return String(getCurrentUserEmail()||'').toLowerCase()==='growth@apertera.com';}
 const AMPLIFY_UPDATE_TYPES = {
@@ -2204,6 +2392,8 @@ async function renderAmplifyView(){
   const activeParticipantKeys = new Set(activeParticipants.map(row=>row.profile_key));
   const visibleLeaderboard = activeParticipantKeys.size ? leaderboard.filter(row=>activeParticipantKeys.has(row.profile_key)) : leaderboard;
   document.getElementById('amplify-nav-count').textContent = activeParticipants.length || visibleLeaderboard.length || '0';
+  const analyticsCount = document.getElementById('analytics-nav-count');
+  if(analyticsCount) analyticsCount.textContent = fmtInt((AMPLIFY_DATA.analyticsInteractions||[]).length);
   if(error){ content.innerHTML=`<div class="amplify-empty">Could not load Amplify Challenge: ${escapeHTML(error)}</div>`; return; }
   const active = visibleLeaderboard.filter(row=>Number(row.total_points)>0);
   const totalPoints = active.reduce((sum,row)=>sum+Number(row.total_points||0),0);
