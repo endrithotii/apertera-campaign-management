@@ -2470,19 +2470,30 @@ async function runAmplifySync(payload,triggerButton=null){
 }
 
 // ---------- KPI row (campaigns view) ----------
-function renderKPIs(){
-  const totalSpend = CARDS.reduce((s,c)=>s+c.spend,0);
-  const totalImpr = CARDS.reduce((s,c)=>s+c.impressions,0);
-  const totalClicks = CARDS.reduce((s,c)=>s+c.clicks,0);
-  const totalLeads = CARDS.reduce((s,c)=>s+c.leads,0);
+function currentDataDateLabel(){
+  const dates = (DATA.accountTrend || []).map(row => parseUSDate(row.date)).filter(Boolean).sort((a,b)=>a-b);
+  if(!dates.length) return state.dateRange === 'all' ? 'all dates' : `last ${state.dateRange} days`;
+  return `${fmtDate(dates[0])} – ${fmtDate(dates[dates.length - 1])}, ${dates[dates.length - 1].getFullYear()}`;
+}
+function adsForCards(cards){
+  const keys = new Set(cards.map(card => `${card.campaign}|||${card.name}`));
+  return DATA.flatAds.filter(ad => keys.has(`${ad.campaign}|||${ad.adset}`));
+}
+function renderKPIs(cards = CARDS){
+  const totalSpend = cards.reduce((s,c)=>s+c.spend,0);
+  const totalImpr = cards.reduce((s,c)=>s+c.impressions,0);
+  const totalClicks = cards.reduce((s,c)=>s+c.clicks,0);
+  const totalLeads = cards.reduce((s,c)=>s+c.leads,0);
   const avgCtr = totalImpr ? (totalClicks/totalImpr*100) : 0;
+  const visibleAds = adsForCards(cards);
+  const activeCreatives = visibleAds.filter(a=>a.status==='Active').length;
   return `
   <div class="kpi-row">
-    <div class="kpi"><div class="kpi-label">Total Spend</div><div class="kpi-value">${fmtMoney(totalSpend,0)}</div><div class="kpi-sub">Apr 24 – Jul 22, 2026</div></div>
-    <div class="kpi"><div class="kpi-label">Impressions</div><div class="kpi-value">${fmtInt(totalImpr)}</div><div class="kpi-sub">across ${CARDS.length} ad sets</div></div>
+    <div class="kpi"><div class="kpi-label">Total Spend</div><div class="kpi-value">${fmtMoney(totalSpend,0)}</div><div class="kpi-sub">${currentDataDateLabel()}</div></div>
+    <div class="kpi"><div class="kpi-label">Impressions</div><div class="kpi-value">${fmtInt(totalImpr)}</div><div class="kpi-sub">across ${cards.length} ad sets</div></div>
     <div class="kpi"><div class="kpi-label">Clicks</div><div class="kpi-value">${fmtInt(totalClicks)}</div><div class="kpi-sub">${fmtPct(avgCtr)} blended CTR</div></div>
     <div class="kpi"><div class="kpi-label">Leads</div><div class="kpi-value">${fmtInt(totalLeads)}</div><div class="kpi-sub">from lead-gen forms</div></div>
-    <div class="kpi"><div class="kpi-label">Live Creatives</div><div class="kpi-value">${DATA.flatAds.length}</div><div class="kpi-sub">${DATA.flatAds.filter(a=>a.status==='Active').length} currently active</div></div>
+    <div class="kpi"><div class="kpi-label">Active Creatives</div><div class="kpi-value">${fmtInt(activeCreatives)}</div><div class="kpi-sub">${fmtInt(visibleAds.length)} total in current scope</div></div>
   </div>`;
 }
 
@@ -2668,7 +2679,7 @@ function renderGallery(){
     byCampaign[c.campaign].push(c);
   });
 
-  let html = bannerHTML() + renderKPIs();
+  let html = bannerHTML() + renderKPIs(filtered);
 
   if(filtered.length === 0){
     html += `<div class="empty-note">No creatives match "${state.search}".</div>`;
@@ -2721,7 +2732,7 @@ function wireAdsetViewCards(selector){
 
 function renderCampaignGridView(){
   const filtered = applyFilters(CARDS);
-  document.getElementById('content').innerHTML = bannerHTML() + renderKPIs() +
+  document.getElementById('content').innerHTML = bannerHTML() + renderKPIs(filtered) +
     (filtered.length
       ? `<div class="campaign-grid-view">${filtered.map(renderCard).join('')}</div>`
       : `<div class="empty-note">No campaigns match the current filters.</div>`);
@@ -2765,7 +2776,7 @@ function renderStatusKanbanView(){
       ${items.map(kanbanCardHTML).join('') || `<div class="empty-note">No ${status.toLowerCase()} ad sets</div>`}
     </section>`;
   }).join('');
-  document.getElementById('content').innerHTML = bannerHTML() + renderKPIs() + `<div class="kanban-board">${html}</div>`;
+  document.getElementById('content').innerHTML = bannerHTML() + renderKPIs(filtered) + `<div class="kanban-board">${html}</div>`;
   wireAdsetViewCards('.kanban-card');
   document.querySelectorAll('.kanban-card').forEach(el => el.addEventListener('keydown', e => {
     if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openPanel(el.getAttribute('data-id'), null, currentView); }
